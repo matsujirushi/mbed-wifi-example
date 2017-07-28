@@ -27,7 +27,7 @@ typedef enum
     JOY_UP = 5
 } JOY_State_TypeDef;
 
-Serial pc( STDIO_UART_TX, STDIO_UART_RX, 115200 );
+// Serial pc( STDIO_UART_TX, STDIO_UART_RX, 115200 );
 
 #define app_log(format, ...)  custom_log("MiCOKit_STmems", format, ##__VA_ARGS__)
 
@@ -103,6 +103,93 @@ static OSStatus irda_init( )
     return err;
 }
 
+TIM_HandleTypeDef htim2;
+
+void sirc_gpio_init()
+{
+    pinmap_pinout(PB_10, PinMap_PWM);
+    pin_mode(PB_10, PushPullNoPull);
+}
+
+void sirc_timer_init()
+{
+    TIM_MasterConfigTypeDef sMasterConfig;
+    TIM_OC_InitTypeDef sConfigOC;
+
+    htim2.Instance = TIM2;
+    htim2.Init.Prescaler = 50 - 1;
+    htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim2.Init.Period = 50 - 1;
+    htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+    {
+        // Error_Handler();
+        printf("Timer init error");
+    }
+
+    sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+    sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+    if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+    {
+        // Error_Handler();
+        printf("Timer Master Output error");
+    }
+
+    sConfigOC.OCMode = TIM_OCMODE_PWM1;
+    sConfigOC.Pulse = 25;
+    sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+    sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+    if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+    {
+        // Error_Handler();
+        printf("Timer PWM Config Channel error");
+    }
+}
+
+void SIRC_Send_1()
+{
+	HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_3);
+	wait_us(1200);
+	HAL_TIM_PWM_Stop(&htim2,TIM_CHANNEL_3);
+	wait_us(600);
+}
+
+void SIRC_Send_0()
+{
+	HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_3);
+	wait_us(600);
+	HAL_TIM_PWM_Stop(&htim2,TIM_CHANNEL_3);
+	wait_us(600);
+}
+
+void send_start_bits()
+{
+	HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_3);
+	wait_us(2400);
+	HAL_TIM_PWM_Stop(&htim2,TIM_CHANNEL_3);
+	wait_us(600);
+}
+
+void sirc_Send_Example_Cmd_bits()
+{
+	SIRC_Send_0();
+    SIRC_Send_0();
+    SIRC_Send_0();
+    SIRC_Send_0();
+    SIRC_Send_0();
+    SIRC_Send_0();
+    SIRC_Send_0();
+}
+
+void sirc_Send_Example_Address_bits()
+{
+	SIRC_Send_1();
+	SIRC_Send_0();
+	SIRC_Send_0();
+	SIRC_Send_0();
+	SIRC_Send_0();
+}
+
 void BUTTON_A_CB( )
 {
     step_one_complete = 1;
@@ -117,12 +204,6 @@ void BUTTON_B_CB( )
     page = 2;
     need_clear = 1;
 
-}
-
-void do_nothing()
-{
-    int i = 0;
-    i++;
 }
 
 int app_audio( )
@@ -160,22 +241,23 @@ int app_audio( )
 
     _interrupt_BUTTON_A.rise( callback( &BUTTON_A_CB ) );
     _interrupt_BUTTON_B.rise( callback( &BUTTON_B_CB ) );
-    _interrupt_BUTTON_B.fall( callback( &do_nothing ) );
-
 
 
     rgb_r.period( 0.001 );
     rgb_g.period( 0.001 );
     rgb_b.period( 0.001 );
 
-    irda_init( );
+    // irda_init( );
+    /* sirc init */
+    sirc_gpio_init();
+    sirc_timer_init();
 
     // init OLED
     OLED_Init( );
     /*1.oled all light*/
     OLED_FillAll( );
-//    Thread::wait( 2000 );
-//    OLED_Clear( );
+   Thread::wait( 2000 );
+   OLED_Clear( );
 
     /*init LPS22HB */
     err = lps25hb_sensor_init( );
@@ -238,7 +320,6 @@ int app_audio( )
 //
 //                sprintf( oled_show_line, "glo%02d,%02d,%02d", g_axes[0], g_axes[1], g_axes[2] );
 //                OLED_ShowString( 0, OLED_DISPLAY_ROW_3, oled_show_line );
-
                 break;
             case 1:
                 /*magnetometer pressure*/
@@ -313,8 +394,12 @@ int app_audio( )
             first_time = 0;
         }
 
-        joy_status = cur_rgb % 5 + 1;
-        HAL_IRDA_Transmit( &IrdaHandle, &joy_status, 1, 100 );
+        // joy_status = cur_rgb % 5 + 1;
+        // HAL_IRDA_Transmit( &IrdaHandle, &joy_status, 1, 100 );
+        send_start_bits();
+        /* send 1 */
+	    sirc_Send_Example_Cmd_bits();
+	    sirc_Send_Example_Address_bits();
 
         Thread::wait( 500 );
 
