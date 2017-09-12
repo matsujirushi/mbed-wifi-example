@@ -2,4 +2,8 @@
 .mbed
 projectfiles
 *.py*
-
+.vscode
+BUILD/
+/TARGET_CMakeBuild
+.idea
+CMakeLists.txt
