@@ -1,11 +1,9 @@
 #include "mbed.h"
 #include "mico.h"
 
-#define RUN_APPLICATION( app )     extern int app_##app(void); return app_##app();
+#define RUN_APPLICATION( app )     extern int app_##app(void); return app_##app()
 
-extern "C" int app_ble_proximity_reporter(void);
-
-int main( void )
+int main( )
 {
     /* APPLICATION can be assigned to the folder names under folder "APP" */
 //    RUN_APPLICATION( iperf );
@@ -15,8 +13,6 @@ int main( void )
 //    RUN_APPLICATION( mbed_tcp_udp );
 //    RUN_APPLICATION( soft_ap );
 //    RUN_APPLICATION( audio );
-
-//    RUN_APPLICATION(bt_rfcomm_server);
-    return app_ble_proximity_reporter();
-	return 0;
+//    RUN_APPLICATION( ble_hello_sensor );
+    RUN_APPLICATION( ble_hello_center );
 }
