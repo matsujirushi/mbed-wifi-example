@@ -15,4 +15,5 @@ int main( )
 //    RUN_APPLICATION( audio );
 //    RUN_APPLICATION( ble_hello_sensor );
     RUN_APPLICATION( ble_hello_center );
+//    RUN_APPLICATION(uart_test);
 }
