@@ -286,7 +286,7 @@ int app_ble_hello_sensor()
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
 
     /* Initialise MiCO Bluetooth Framework */
-    err = mico_bt_init(MICO_BT_HCI_MODE, DEFAULT_NAME "_SENSOR", 0, 1);  //Client + server connections
+    err = mico_bt_init(MICO_BT_HCI_MODE, "AZ3239_SENSOR", 0, 1);  //Client + server connections
     require_noerr_string(err, exit, "Error initialising MiCO Bluetooth Framework");
 
     /* Initialise MiCO Bluetooth Peripheral interface */
@@ -323,7 +323,7 @@ int app_ble_hello_sensor()
     hello_sensor_state.battery_level = 0;
     hello_sensor_state.led_color_idx = 0;
 
-    hsb2rgb_led_open((hello_sensor_state.led_color_idx * 60) % 360, 100, 5);
+    hsb2rgb_led_open((hello_sensor_state.led_color_idx * 60) % 360, 100, 50);
 
 exit:
     return err;
@@ -534,7 +534,7 @@ mico_bt_gatt_status_t color_val_callback(mico_bt_ext_attribute_value_t *attribut
         mico_bt_dev_read_rssi(peripheral_socket.remote_device.address, BT_TRANSPORT_LE,
                               (mico_bt_dev_cmpl_cback_t *) hello_sensor_rssi_callback);
 
-        hsb2rgb_led_open( (hello_sensor_state.led_color_idx * 60) % 360 , 100, 5);
+        hsb2rgb_led_open( (hello_sensor_state.led_color_idx * 60) % 360 , 100, 50);
 
         memset(oled_show_line, 0, sizeof(oled_show_line));
         snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "Color: 0x%02x", hello_sensor_state.led_color_idx);
@@ -685,8 +685,6 @@ static void OpenLED_RGB(float *color)
     uint8_t blue = (uint8_t) (color[2]);
     uint8_t green = (uint8_t) (color[1]);
     uint8_t red = (uint8_t) (color[0]);
-
-    //hsb2rgb_led_log("OpenLED_RGB: red=%d, green=%d, blue=%d.", red, green, blue);
 
     LED_R = red / H2R_MAX_RGB_val;
     LED_G = green / H2R_MAX_RGB_val;
