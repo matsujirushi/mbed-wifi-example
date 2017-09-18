@@ -1,9 +1,9 @@
 /**
  ******************************************************************************
- * @file    ble_hello_sensor.c
- * @author  William Xu
+ * @file    ble_hello_sensor.cpp
+ * @author  Jian Zhang
  * @version V1.0.0
- * @date    17-Feb-2016
+ * @date    12-Sep-2017
  * @file    Demonstrate a BLE peripheral device function
  * ******************************************************************************
  *
@@ -26,32 +26,6 @@
  *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
  *  WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
  *  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- ******************************************************************************
- * BLE Vendor Specific Device
- *
- * Features demonstrated
- *  - GATT database and Device configuration initialization
- *  - Registration with LE stack for various events
- *  - Sending data to the client
- *  - Processing write requests from the client
- *
- * To demonstrate the app, work through the following steps.
- * 1. Plug the MiCOKit board into your computer
- * 2. Build and download the application (to the MiCOKit board)
- * 3. On application start the device acts as a GATT server and advertises itself as Hello Sensor
- * 4. Connect to GATT server using one of the LE clients (BlueDeng(android)) or (LightBlue(Apple Store))
- * 5. Once connected the client can read Hello sensor characteristics
- * 6. Write the hello sensor characteristic configuration value from client
- * 7. on the console terminal you can see the value entered in the client
- * 8. To receive notification the user has to register for notification after LE connection on the client
- * 9. To test notifications user can enter the command "notify" on the console
- * 10. Each time when user enters the notify command a new value of notification can be seen on the LE client.
- *
- * Important Notice
- * SPP service is to deliver data between APP_UART and BLE interface.
- * EMW3238 module has only one user UART and configured for debug info in default, to use this UART as
- * APP_UART and acquire its data properly, two macro should be changed
  *
  ******************************************************************************
  **/

@@ -1,9 +1,9 @@
 /**
  ******************************************************************************
- * @file    ble_hello_center.c
- * @author  William Xu
+ * @file    ble_hello_center.cpp
+ * @author  Jian Zhang
  * @version V1.0.0
- * @date    30-Apr-2016
+ * @date    12-Sep-2017
  * @file    Demonstrate a BLE center device function
  * ******************************************************************************
  *
@@ -27,25 +27,6 @@
  *  WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
  *  IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- ******************************************************************************
- * BLE Vendor Specific Central Device
- *
- * Features demonstrated
- *  - Connect "MiCOKit EMW3238" device and create Client GATT database cache
- *  - Sending data to the hello sensor demo device to control led color
- *  - Read notification and indication from hello sensor demo device
- *  - Create a hello peripheral for device information
- *
- * To demonstrate the demo, work through the following steps.
- * 1. Plug the MiCOKit board into your computer
- * 2. Build and download the application (to the MiCOKit board)
- * 3. On application start the device acts as a GATT client and scan for "MiCOKit EMW3238" devices
- * 4. Plug the another MiCOKit board into your computer
- * 5. Build and download the hello sensor demo(demos/bluetooth/ble_hello_sensor) to another MiCOKit board
- * 6. On hello sensor demo application, start the device acts as a GATT server and advertises itself as "MiCOKit EMW3238" devices
- * 7. Center application will connect to hello sensor, start pairing and establish GATT database cache
- * 8. Send led control characteristic data to hello sensor
- * 9. Read indicate and notify from hello sensor
  ******************************************************************************
  **/
 
