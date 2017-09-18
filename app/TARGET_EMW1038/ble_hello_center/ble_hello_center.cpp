@@ -238,7 +238,7 @@ int app_ble_hello_center()
     /* Create a worker thread for making a connection and control event */
     mico_rtos_create_worker_thread(&hello_center_worker_thread, MICO_APPLICATION_PRIORITY, 2048, 1);
 
-    mico_rtos_create_worker_thread(&hello_sensor_color_toggle_worker_thread, MICO_APPLICATION_PRIORITY, 1024, 1);
+    mico_rtos_create_worker_thread(&hello_sensor_color_toggle_worker_thread, MICO_APPLICATION_PRIORITY, 2048, 1);
 
     mico_rtos_register_timed_event(&hello_sensor_color_toggle_event,
                                    &hello_sensor_color_toggle_worker_thread,
