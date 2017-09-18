@@ -13,7 +13,6 @@ int main( )
 //    RUN_APPLICATION( mbed_tcp_udp );
 //    RUN_APPLICATION( soft_ap );
 //    RUN_APPLICATION( audio );
-//    RUN_APPLICATION( ble_hello_sensor );
-    RUN_APPLICATION( ble_hello_center );
-//    RUN_APPLICATION(uart_test);
+    RUN_APPLICATION( ble_hello_sensor );
+//    RUN_APPLICATION( ble_hello_center );
 }
