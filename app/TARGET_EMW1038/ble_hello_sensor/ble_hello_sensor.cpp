@@ -32,69 +32,71 @@
 
 #include "mbed.h"
 #include "mico.h"
-#include "ble_hello_sensor.h"
-#include "sdpdefs.h"
+#include "mico_bt_dev.h"
+#include "mico_bt_ble.h"
 #include "mico_bt_cfg.h"
-#include "mico_bt.h"
-#include "mico_bt_peripheral.h"
+#include "mico_bt_stack.h"
+#include "sdpdefs.h"
 
 #include "oled.h"
 
-#define hello_sensor_log(M, ...) custom_log("LE Sensor", M, ##__VA_ARGS__)
-
+#include "ble_hello_sensor.h"
 
 /******************************************************************************
  *                                Constants
 ******************************************************************************/
 
+
 /******************************************************************************
  *                           Function Prototypes
  ******************************************************************************/
 
+#define HELLO_PERIPHERAL_LOG(fmt, ...) custom_log("HELLO", fmt, ##__VA_ARGS__)
+
 /* HSB convert to RGB */
 
 void hsb2rgb_led_init();
-
 void hsb2rgb_led_open(float hues, float saturation, float brightness);
-
 void hsb2rgb_led_close();
+
+static void hello_sensor_application_init();
+static mico_bt_gatt_status_t hello_sensor_gatts_connection_status_handler(mico_bt_gatt_connection_status_t *p_status);
+static mico_bt_gatt_status_t hello_sensor_gatts_connection_up(mico_bt_gatt_connection_status_t *p_status);
+static mico_bt_gatt_status_t hello_sensor_gatts_connection_down(mico_bt_gatt_connection_status_t *p_status);
+static mico_bt_result_t      hello_sensor_management_callback(mico_bt_management_evt_t event, mico_bt_management_evt_data_t *p_event_data);
+static mico_bt_gatt_status_t hello_sensor_gatts_callback(mico_bt_gatt_evt_t event, mico_bt_gatt_event_data_t *p_data);
+static mico_bt_gatt_status_t hello_sensor_gatt_server_read_request_handler(uint16_t conn_id, mico_bt_gatt_read_t *p_read_data);
+static mico_bt_gatt_status_t hello_sensor_gatt_server_write_request_handler(uint16_t conn_id, mico_bt_gatt_write_t *p_data);
+static mico_bt_gatt_status_t hello_sensor_gatt_server_write_and_execute_request_handler(uint16_t conn_id, mico_bt_gatt_exec_flag_t exec_flag);
+static void hello_sensor_rssi_callback(void *arg);
+static void hello_sensor_set_advertisement_data();
 
 /******************************************************************************
  *                                Structures
  ******************************************************************************/
 
 typedef struct {
-    uint8_t flag_stay_connected;    /* stay connected or disconnect after all messages are sent */
-    uint8_t battery_level;          /* dummy battery level */
-    uint8_t led_color_idx;          /* RGB led color index */
+    BD_ADDR     remote_addr;          /* remote peer device address */
+    uint32_t    timer_count;          /* timer count */
+    uint32_t    fine_timer_count;     /* fine timer count */
+    uint16_t    conn_id;              /* connection ID referenced by the stack */
+    uint16_t    peer_mtu;             /* peer MTU */
+    uint8_t     flag_indication_sent; /* indicates waiting for confirmation */
+    uint8_t     flag_stay_connected;  /* stay connected or disconnect after all messages are sent */
+    uint8_t     battery_level;        /* dummy battery level */
 } hello_sensor_state_t;
 
-typedef struct {
-    mico_bt_device_address_t bdaddr;
-    uint16_t service_changed;                        /* BD address of the bonded host */
-    uint16_t characteristic_client_configuration;    /* Current value of the client configuration descriptor */
+typedef PACKED struct {
+    BD_ADDR     bdaddr;                               /* BD address of the bonded host */
+    uint16_t    characteristic_client_configuration;  /* Current value of the client configuration descriptor */
+    uint8_t     color_idx;                            /* Sensor config, number of times to blink the LEd when button is pushed. */
 } host_info_t;
 
-/* Peripheral auto advertising settings */
-static mico_bt_smart_advertising_settings_t advertising_settings = {
-    .type                     =  BT_SMART_UNDIRECTED_ADVERTISING,                 /**< Advertising type                                               */
-    .use_high_duty            =  MICO_TRUE,                                       /**< Using high duty to start advertising                           */
-    .high_duty_interval       =  MICO_BT_CFG_DEFAULT_HIGH_DUTY_ADV_MIN_INTERVAL,  /**< High duty advertising interval                                 */
-    .high_duty_duration       =  5,                                               /**< High duty advertising duration in seconds (0 for infinite)     */
-    .low_duty_interval        =  MICO_BT_CFG_DEFAULT_LOW_DUTY_ADV_MIN_INTERVAL,   /**< Low duty advertising interval                                  */
-    .low_duty_duration        =  60,                                              /**< Low duty advertising duration in seconds (0 for infinite)      */
-};
-
-/* Peripheral security settings */
-static const mico_bt_smart_security_settings_t security_settings = {
-    .timeout_second              = 15,
-    .io_capabilities             = BT_SMART_IO_NO_INPUT_NO_OUTPUT,
-    .authentication_requirements = BT_SMART_AUTH_REQ_BONDING,
-    .oob_authentication          = BT_SMART_OOB_AUTH_NONE,
-    .max_encryption_key_size     = 16,
-    .master_key_distribution     = BT_SMART_DISTRIBUTE_ALL_KEYS,
-    .slave_key_distribution      = BT_SMART_DISTRIBUTE_ALL_KEYS,
-};
+typedef struct {
+    uint16_t handle;
+    uint16_t attr_len;
+    void    *p_attr;
+} attribute_t;
 
 /******************************************************************************
  *                                Variables Definitions
@@ -104,23 +106,48 @@ PwmOut LED_R(RGB_R);
 PwmOut LED_G(RGB_G);
 PwmOut LED_B(RGB_B);
 
-/* Initialized attribute value */
-static uint8_t hello_sensor_appearance_name[2]      = { BIT16_TO_8(APPEARANCE_GENERIC_TAG) };
-static uint8_t hello_sensor_char_system_id_value[]  = { 0xbb, 0xb8, 0xa1, 0x80, 0x5f, 0x9f, 0x91, 0x71 };
-static char    hello_sensor_char_disable_value[]    = { 'D', 'I', 'S', 'A', 'B', 'L', 'E', 'D' };
-static char    hello_sensor_char_notify_value[]     = { 'H', 'E', 'L', 'L', 'O', '0' };
-static char    hello_sensor_char_indicate_value[]   = { 'I', 'N', 'D', 'I', 'C', 'A', 'T', 'E', '0' };
+static char oled_show_line[OLED_DISPLAY_MAX_CHAR_PER_ROW + 1] = { '\0' };   // max char each line
+
+static uint8_t hello_sensor_device_name[] = "Hello";
+
+static uint8_t hello_sensor_appearance_name[2] = {
+        BIT16_TO_8(APPEARANCE_GENERIC_TAG)
+};
+
+static char hello_sensor_char_notify_value[] = {
+        'H', 'E', 'L', 'L', 'O', '0'
+};
+
+static char hello_sensor_char_mfr_name_value[] = {
+        'B', 'r', 'o', 'a', 'd', 'c', 'o', 'm', 0,
+};
+
+static char hello_sensor_char_model_num_value[] = {
+        '1', '2', '3', '4',
+         0,   0,   0,   0
+};
+
+static uint8_t hello_sensor_char_system_id_value[] = {
+        0xbb, 0xb8, 0xa1, 0x80,
+        0x5f, 0x9f, 0x91, 0x71
+};
 
 static hello_sensor_state_t hello_sensor_state;
-static host_info_t hello_sensor_hostinfo;
+static host_info_t          hello_sensor_hostinfo;
+static mico_bool_t          is_connected = FALSE;
+static uint8_t              hello_sensor_write;
 
-/* Attributes used to send notify or indicate to le client */
-static mico_bt_ext_attribute_value_t *hello_notify_indicate_attribute = NULL;
-
-/* MiCO BT smart peripheral connection controller */
-static mico_bt_peripheral_socket_t peripheral_socket;
-
-static char oled_show_line[OLED_DISPLAY_MAX_CHAR_PER_ROW + 1] = { '\0' };   // max char each line
+attribute_t gatt_user_attributes[] = {
+    { HANDLE_HSENS_GAP_SERVICE_CHAR_DEV_NAME_VAL,        sizeof(hello_sensor_device_name),           hello_sensor_device_name },
+    { HANDLE_HSENS_GAP_SERVICE_CHAR_DEV_APPEARANCE_VAL,  sizeof(hello_sensor_appearance_name),       hello_sensor_appearance_name },
+    { HANDLE_HSENS_SERVICE_CHAR_NOTIFY_VAL,              sizeof(hello_sensor_char_notify_value),     hello_sensor_char_notify_value },
+    { HANDLE_HSENS_SERVICE_CHAR_CFG_DESC,                2,                                          (void *)&hello_sensor_hostinfo.characteristic_client_configuration},
+    { HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL,               1,                                          &hello_sensor_hostinfo.color_idx },
+    { HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_MFR_NAME_VAL,   sizeof(hello_sensor_char_mfr_name_value),   hello_sensor_char_mfr_name_value },
+    { HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_MODEL_NUM_VAL,  sizeof(hello_sensor_char_model_num_value),  hello_sensor_char_model_num_value },
+    { HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_SYSTEM_ID_VAL,  sizeof(hello_sensor_char_system_id_value),  hello_sensor_char_system_id_value },
+    { HANDLE_HSENS_BATTERY_SERVICE_CHAR_LEVEL_VAL,       1,                                          &hello_sensor_state.battery_level },
+};
 
 /******************************************************************************
  *                                GATT DATABASE
@@ -139,150 +166,166 @@ static char oled_show_line[OLED_DISPLAY_MAX_CHAR_PER_ROW + 1] = { '\0' };   // m
  */
 const uint8_t hello_sensor_gatt_database[] = {
     /* Declare mandatory GATT service */
-    PRIMARY_SERVICE_UUID16(HDLS_GENERIC_ATTRIBUTE, UUID_SERVCLASS_GATT_SERVER),
+    PRIMARY_SERVICE_UUID16(HANDLE_HSENS_GATT_SERVICE,
+                           UUID_SERVCLASS_GATT_SERVER),
 
-    CHARACTERISTIC_UUID16(HDLC_GENERIC_ATTRIBUTE_SERVICE_CHANGED,
-                          HDLC_GENERIC_ATTRIBUTE_SERVICE_CHANGED_VALUE,
-                          GATT_UUID_GATT_SRV_CHGD,
-                          LEGATTDB_CHAR_PROP_INDICATE,
-                          LEGATTDB_PERM_NONE),
-
-    /* Declare mandatory GAP service. Device Name and Appearance are mandatory
-     * characteristics of GAP service                                        */
-    PRIMARY_SERVICE_UUID16(HDLS_GENERIC_ACCESS, UUID_SERVCLASS_GAP_SERVER),
+    /* Declare mandatory GAP service. Device Name and Appearance are
+     * mandatory
+     * characteristics of GAP service */
+    PRIMARY_SERVICE_UUID16(HANDLE_HSENS_GAP_SERVICE,
+                           UUID_SERVCLASS_GAP_SERVER),
 
     /* Declare mandatory GAP service characteristic: Dev Name */
-    CHARACTERISTIC_UUID16(HDLC_GENERIC_ACCESS_DEVICE_NAME, HDLC_GENERIC_ACCESS_DEVICE_NAME_VALUE,
-                          GATT_UUID_GAP_DEVICE_NAME,
-                          LEGATTDB_CHAR_PROP_READ, LEGATTDB_PERM_READABLE),
+    CHARACTERISTIC_UUID16(
+            HANDLE_HSENS_GAP_SERVICE_CHAR_DEV_NAME,
+            HANDLE_HSENS_GAP_SERVICE_CHAR_DEV_NAME_VAL,
+            GATT_UUID_GAP_DEVICE_NAME, LEGATTDB_CHAR_PROP_READ,
+            LEGATTDB_PERM_READABLE),
 
     /* Declare mandatory GAP service characteristic: Appearance */
-    CHARACTERISTIC_UUID16(HDLC_GENERIC_ACCESS_APPEARANCE, HDLC_GENERIC_ACCESS_APPEARANCE_VALUE,
-                          GATT_UUID_GAP_ICON,
-                          LEGATTDB_CHAR_PROP_READ, LEGATTDB_PERM_READABLE),
+    CHARACTERISTIC_UUID16(
+            HANDLE_HSENS_GAP_SERVICE_CHAR_DEV_APPEARANCE,
+            HANDLE_HSENS_GAP_SERVICE_CHAR_DEV_APPEARANCE_VAL,
+            GATT_UUID_GAP_ICON, LEGATTDB_CHAR_PROP_READ,
+            LEGATTDB_PERM_READABLE),
 
     /* Declare proprietary Hello Service with 128 byte UUID */
-    PRIMARY_SERVICE_UUID128(HDLS_HELLO_SENSOR, UUID_HELLO_SERVICE),
+    PRIMARY_SERVICE_UUID128(HANDLE_HSENS_SERVICE,
+                            UUID_HELLO_SERVICE),
 
     /* Declare characteristic used to notify/indicate change */
-    CHARACTERISTIC_UUID128(HDLC_HELLO_SENSOR_NOTIFY, HDLC_HELLO_SENSOR_NOTIFY_VALUE,
+    CHARACTERISTIC_UUID128(HANDLE_HSENS_SERVICE_CHAR_NOTIFY,
+                           HANDLE_HSENS_SERVICE_CHAR_NOTIFY_VAL,
                            UUID_HELLO_CHARACTERISTIC_NOTIFY,
-                           LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_NOTIFY |
+                           LEGATTDB_CHAR_PROP_READ |
+                           LEGATTDB_CHAR_PROP_NOTIFY |
                            LEGATTDB_CHAR_PROP_INDICATE,
                            LEGATTDB_PERM_READABLE),
 
     /* Declare client characteristic configuration descriptor
      * Value of the descriptor can be modified by the client
-     * Value modified shall be retained during connection and across connection
-     * for bonded devices.  Setting value to 1 tells this application to send notification
-     * when value of the characteristic changes.  Value 2 is to allow indications. */
-    CHAR_DESCRIPTOR_UUID16_WRITABLE(HDLC_HELLO_SENSOR_NOTIFY_CFG_DESC, GATT_UUID_CHAR_CLIENT_CONFIG,
-                                    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_REQ),
+     * Value modified shall be retained during connection and across
+     * connection
+     * for bonded devices.  Setting value to 1 tells this
+     * application to send notification
+     * when value of the characteristic changes.  Value 2 is to
+     * allow indications. */
+    CHAR_DESCRIPTOR_UUID16_WRITABLE(
+            HANDLE_HSENS_SERVICE_CHAR_CFG_DESC,
+            GATT_UUID_CHAR_CLIENT_CONFIG,
+            LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_REQ),
 
     /* Declare characteristic Hello Configuration */
-    CHARACTERISTIC_UUID128_WRITABLE(HDLC_HELLO_SENSOR_COLOR, HDLC_HELLO_SENSOR_COLOR_VALUE,
-                                    UUID_HELLO_CHARACTERISTIC_COLOR,
-                                    LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_WRITE,
-                                    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |
-                                    LEGATTDB_PERM_WRITE_REQ),
+    CHARACTERISTIC_UUID128_WRITABLE(
+            HANDLE_HSENS_SERVICE_CHAR_COLOR,
+            HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL,
+            UUID_HELLO_CHARACTERISTIC_CONFIG,
+            LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_WRITE,
+            LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |
+            LEGATTDB_PERM_WRITE_REQ),
 
     /* Declare Device info service */
-    PRIMARY_SERVICE_UUID16(HDLS_DEV_INFO, UUID_SERVCLASS_DEVICE_INFO),
+    PRIMARY_SERVICE_UUID16(HANDLE_HSENS_DEV_INFO_SERVICE,
+                           UUID_SERVCLASS_DEVICE_INFO),
 
-    /* Handle 0x4e: characteristic Manufacturer Name */
-    CHARACTERISTIC_UUID16(HDLC_DEV_INFO_MFR_NAME, HDLC_DEV_INFO_MFR_NAME_VALUE,
-                          GATT_UUID_MANU_NAME,
-                          LEGATTDB_CHAR_PROP_READ, LEGATTDB_PERM_READABLE),
+    /* Handle 0x4e: characteristic Manufacturer Name, handle 0x4f
+       characteristic value */
+    CHARACTERISTIC_UUID16(
+            HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_MFR_NAME,
+            HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_MFR_NAME_VAL,
+            GATT_UUID_MANU_NAME, LEGATTDB_CHAR_PROP_READ,
+            LEGATTDB_PERM_READABLE),
 
-    /* Handle 0x50: characteristic Model Number */
-    CHARACTERISTIC_UUID16(HDLC_DEV_INFO_MODEL_NUM, HDLC_DEV_INFO_MODEL_NUM_VALUE,
-                          GATT_UUID_MODEL_NUMBER_STR,
-                          LEGATTDB_CHAR_PROP_READ, LEGATTDB_PERM_READABLE),
+    /* Handle 0x50: characteristic Model Number, handle 0x51
+       characteristic value */
+    CHARACTERISTIC_UUID16(
+            HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_MODEL_NUM,
+            HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_MODEL_NUM_VAL,
+            GATT_UUID_MODEL_NUMBER_STR, LEGATTDB_CHAR_PROP_READ,
+            LEGATTDB_PERM_READABLE),
 
-    /* Handle 0x52: characteristic System ID */
-    CHARACTERISTIC_UUID16(HDLC_DEV_INFO_SYSTEM_ID, HDLC_DEV_INFO_SYSTEM_ID_VALUE,
-                          GATT_UUID_SYSTEM_ID,
-                          LEGATTDB_CHAR_PROP_READ, LEGATTDB_PERM_READABLE),
+    /* Handle 0x52: characteristic System ID, handle 0x53
+       characteristic value */
+    CHARACTERISTIC_UUID16(
+            HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_SYSTEM_ID,
+            HANDLE_HSENS_DEV_INFO_SERVICE_CHAR_SYSTEM_ID_VAL,
+            GATT_UUID_SYSTEM_ID, LEGATTDB_CHAR_PROP_READ,
+            LEGATTDB_PERM_READABLE),
 
     /* Declare Battery service */
-    PRIMARY_SERVICE_UUID16(HDLS_BAT, UUID_SERVCLASS_BATTERY),
+    PRIMARY_SERVICE_UUID16(HANDLE_HSENS_BATTERY_SERVICE,
+                           UUID_SERVCLASS_BATTERY),
 
-    /* Handle 0x62: characteristic Battery Level, handle 0x63 characteristic value */
-    CHARACTERISTIC_UUID16(HDLC_BAT_LEVEL, HDLC_BAT_LEVEL_VALUE,
-                          GATT_UUID_BATTERY_LEVEL,
-                          LEGATTDB_CHAR_PROP_READ, LEGATTDB_PERM_READABLE),
+    /* Handle 0x62: characteristic Battery Level, handle 0x63
+       characteristic value */
+    CHARACTERISTIC_UUID16(
+            HANDLE_HSENS_BATTERY_SERVICE_CHAR_LEVEL,
+            HANDLE_HSENS_BATTERY_SERVICE_CHAR_LEVEL_VAL,
+            GATT_UUID_BATTERY_LEVEL, LEGATTDB_CHAR_PROP_READ,
+            LEGATTDB_PERM_READABLE),
 };
 
 /******************************************************************************
  *                          Function Definitions
  ******************************************************************************/
 
-static void hello_sensor_create_attribute_db();
-
-/* Peripheral connection handlers */
-static OSStatus connection_handler(mico_bt_peripheral_socket_t *socket);
-
-static OSStatus disconnection_handler(mico_bt_peripheral_socket_t *socket);
-
-static OSStatus hello_sensor_set_advertisement_data();
-
-static OSStatus advertisement_complete_handle(void *arg);
-
-/* Peripheral attribute operation handlers */
-static mico_bt_gatt_status_t
-battery_level_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op);
-
-static mico_bt_gatt_status_t
-color_val_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op);
-
-static mico_bt_gatt_status_t
-notification_char_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op);
-
-static mico_bt_gatt_status_t
-char_cfg_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op);
-
 /*
- *  Entry point to the application.
+ *  Entry point to the application. Set device configuration and start BT
+ *  stack initialization.  The actual application initialization will happen
+ *  when stack reports that BT device is ready.
  */
 
-int app_ble_hello_sensor()
+void app_ble_hello_sensor()
 {
-    OSStatus err = kNoErr;
-
-    OLED_Init();
-
-    /* mico system initialize */
     mico_system_context_init(0);
 
-    /* Starting ... */
-    hello_sensor_log("ble_hello_sensor initialising...");
+    OLED_Init();
+    /* LED Initialize */
+    hsb2rgb_led_init();
+
+    HELLO_PERIPHERAL_LOG("Hello Sensor Start");
     snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE starting ...");
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
+    hsb2rgb_led_open(0, 100, 50);
 
-    /* Initialise MiCO Bluetooth Framework */
-    err = mico_bt_init(MICO_BT_HCI_MODE, "AZ3239_SENSOR", 0, 1);  //Client + server connections
-    require_noerr_string(err, exit, "Error initialising MiCO Bluetooth Framework");
+    /* Register call back and configuration with stack */
+    mico_bt_stack_init(hello_sensor_management_callback,
+                       &mico_bt_cfg_settings_peripheral,
+                       mico_bt_cfg_buf_pools_peripheral);
+}
 
-    /* Initialise MiCO Bluetooth Peripheral interface */
-    mico_bt_peripheral_init(&peripheral_socket, &security_settings, connection_handler, disconnection_handler, NULL);
+/*
+ * This function is executed in the BTM_ENABLED_EVT management callback.
+ */
+static void hello_sensor_application_init()
+{
+    mico_bt_gatt_status_t gatt_status;
+    mico_bt_result_t      result;
 
-    /* Build BT stack layer GATT database (handle, uuid, permission, properity)*/
-    mico_bt_gatt_db_init(hello_sensor_gatt_database, sizeof(hello_sensor_gatt_database));
-
-    /* Build BT application layer GATT database ( extenal value, callback functions )*/
-    hello_sensor_create_attribute_db();
-
-    hello_sensor_log("ble_hello_sensor initialised");
-
+    HELLO_PERIPHERAL_LOG("hello_sensor_application_init");
     /* Started */
     memset(oled_show_line, 0, sizeof(oled_show_line));
     snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Hello Sensor");
     OLED_Clear();
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
 
+    /* Register with stack to receive GATT callback */
+    gatt_status = mico_bt_gatt_register(GATT_IF_FIXED_DB_APP, hello_sensor_gatts_callback);
+
+    HELLO_PERIPHERAL_LOG("mico_bt_gatt_register: %d", gatt_status);
+
+    /*  Tell stack to use our GATT database */
+    gatt_status = mico_bt_gatt_db_init(hello_sensor_gatt_database,
+                                       sizeof(hello_sensor_gatt_database));
+
+    HELLO_PERIPHERAL_LOG("mico_bt_gatt_db_init %d", gatt_status);
+
     /* Set the advertising parameters and make the device discoverable */
     hello_sensor_set_advertisement_data();
-    mico_bt_peripheral_start_advertisements(&advertising_settings, advertisement_complete_handle);
+
+    result = mico_bt_start_advertisements(BTM_BLE_ADVERT_UNDIRECTED_HIGH, 0, NULL);
+
+    HELLO_PERIPHERAL_LOG("mico_bt_start_advertisements %d", result);
 
     /* Advertising */
     memset(oled_show_line, 0, sizeof(oled_show_line));
@@ -294,71 +337,52 @@ int app_ble_hello_sensor()
      * Reset flag to 0, to disconnect
      */
     hello_sensor_state.flag_stay_connected = 1;
-    hello_sensor_state.battery_level = 0;
-    hello_sensor_state.led_color_idx = 0;
-
-    hsb2rgb_led_open((hello_sensor_state.led_color_idx * 60) % 360, 100, 50);
-
-exit:
-    return err;
 }
 
-
-OSStatus hello_sensor_set_advertisement_data()
+/*
+ * Setup advertisement data with 16 byte UUID and device name
+ */
+void hello_sensor_set_advertisement_data()
 {
-    OSStatus err = kNoErr;
-
-    uint16_t uuid[1] = { UUID_SERVCLASS_BATTERY };
-
-    mico_bt_ble_service_t adver_services_16 = {
-            .num_service = 1,
-            .list_cmpl = false,
-            .p_uuid = uuid
-    };
+    OSStatus err;
 
     mico_bt_ble_128service_t adver_services_128 = {
-            .list_cmpl = false,
-            .uuid128 = { UUID_HELLO_SERVICE }
+            .list_cmpl = FALSE,
+            .uuid128 = {UUID_HELLO_SERVICE}
     };
 
     mico_bt_ble_advert_data_t adv_data;
 
     adv_data.flag = BTM_BLE_GENERAL_DISCOVERABLE_FLAG | BTM_BLE_BREDR_NOT_SUPPORTED;
-    adv_data.p_services = &adver_services_16;
     adv_data.p_services_128b = &adver_services_128;
 
-    mico_bt_ble_set_advertisement_data(BTM_BLE_ADVERT_BIT_DEV_NAME |
-                                       BTM_BLE_ADVERT_BIT_SERVICE |
-                                       BTM_BLE_ADVERT_BIT_FLAGS,
-                                       &adv_data);
+    err = mico_bt_ble_set_advertisement_data(BTM_BLE_ADVERT_BIT_DEV_NAME |
+                                             BTM_BLE_ADVERT_BIT_SERVICE_128 |
+                                             BTM_BLE_ADVERT_BIT_FLAGS,
+                                             &adv_data);
 
-    mico_bt_ble_set_scan_response_data(BTM_BLE_ADVERT_BIT_SERVICE_128, &adv_data);
-
-    return err;
+    HELLO_PERIPHERAL_LOG("mico_bt_ble_set_advertisement_data %d", err);
 }
 
 /*
- * This function is invoked when advertisements changed.  If we are configured to stay connected,
- * disconnection was caused by the peer, start low advertisements, so that peer can connect
+ * This function is invoked when advertisements stop.  If we are configured to
+ * stay connected,
+ * disconnection was caused by the peer, start low advertisements, so that peer
+ * can connect
  * when it wakes up
  */
-
-OSStatus advertisement_complete_handle(void *arg)
+void hello_sensor_advertisement_stopped()
 {
-    UNUSED_PARAMETER(arg);
-    OSStatus result = kNoErr;
-    mico_bt_peripheral_socket_status_t status;
+    mico_bt_result_t result;
 
-    mico_bt_peripheral_get_socket_status(&peripheral_socket, &status);
-    if (hello_sensor_state.flag_stay_connected && status == PERIPHERAL_SOCKET_DISCONNECTED) {
-        advertising_settings.use_high_duty = MICO_FALSE;
-        result = mico_bt_peripheral_start_advertisements(&advertising_settings, advertisement_complete_handle);
-        hello_sensor_log("mico_bt_start_advertisements: %d", result);
+    if (hello_sensor_state.flag_stay_connected && !hello_sensor_state.conn_id) {
+        result = mico_bt_start_advertisements(BTM_BLE_ADVERT_UNDIRECTED_LOW, 0, NULL);
+        HELLO_PERIPHERAL_LOG("mico_bt_start_advertisements: %d", result);
     } else {
-        hello_sensor_log("ADV stop");
+        HELLO_PERIPHERAL_LOG("ADV stop");
 
         memset(oled_show_line, 0, sizeof(oled_show_line));
-        snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Sensor Demo");
+        snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Hello Sensor");
         OLED_Clear();
         OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
 
@@ -367,107 +391,272 @@ OSStatus advertisement_complete_handle(void *arg)
         snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "   ADVERTISED   ");
         OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_2, oled_show_line);
     }
+}
+
+/*
+ * hello_sensor bt/ble link management callback
+ */
+static mico_bt_result_t
+hello_sensor_management_callback(mico_bt_management_evt_t event,
+                                 mico_bt_management_evt_data_t *p_event_data)
+{
+    mico_bt_result_t result = MICO_BT_SUCCESS;
+    mico_bt_dev_ble_pairing_info_t *p_info;
+    mico_bt_ble_advert_mode_t *p_mode;
+
+    HELLO_PERIPHERAL_LOG("hello_sensor_management_callback: %x", event);
+
+    switch (event) {
+        /* Bluetooth  stack enabled */
+        case BTM_ENABLED_EVT:
+            hello_sensor_application_init();
+            break;
+
+        case BTM_DISABLED_EVT:
+            break;
+
+        case BTM_PAIRING_IO_CAPABILITIES_BLE_REQUEST_EVT:
+            p_event_data->pairing_io_capabilities_ble_request.local_io_cap  = BTM_IO_CAPABILITIES_NONE;
+            p_event_data->pairing_io_capabilities_ble_request.oob_data      = BTM_OOB_NONE;
+            p_event_data->pairing_io_capabilities_ble_request.auth_req      = BTM_LE_AUTH_REQ_BOND | BTM_LE_AUTH_REQ_MITM;
+            p_event_data->pairing_io_capabilities_ble_request.max_key_size  = 0x10;
+            p_event_data->pairing_io_capabilities_ble_request.init_keys     = BTM_LE_KEY_PENC | BTM_LE_KEY_PID;
+            p_event_data->pairing_io_capabilities_ble_request.resp_keys     = BTM_LE_KEY_PENC | BTM_LE_KEY_PID;
+            break;
+
+        case BTM_PAIRING_COMPLETE_EVT:
+            p_info = &p_event_data->pairing_complete.pairing_complete_info.ble;
+            HELLO_PERIPHERAL_LOG("Pairing Complete: %d", p_info->reason);
+            break;
+
+        case BTM_SECURITY_REQUEST_EVT:
+            mico_bt_ble_security_grant(p_event_data->security_request.bd_addr,
+                                       MICO_BT_SUCCESS);
+            break;
+
+        case BTM_BLE_ADVERT_STATE_CHANGED_EVT:
+            p_mode = &p_event_data->ble_advert_state_changed;
+            HELLO_PERIPHERAL_LOG("Advertisement State Change: %d", *p_mode);
+            if (*p_mode == BTM_BLE_ADVERT_OFF) {
+                hello_sensor_advertisement_stopped();
+            }
+            break;
+
+        default:
+            break;
+    }
+
     return result;
 }
 
-void hello_sensor_create_attribute_db()
+
+/*
+ * Find attribute description by handle
+ */
+static attribute_t *hello_sensor_get_attribute(uint16_t handle)
 {
-    extern mico_bt_cfg_settings_t mico_bt_cfg_settings;
-
-    /* Create BLE GATT value database */
-    // ***** Primary service 'Generic Attribute'
-    mico_bt_peripheral_ext_attribute_add(HDLC_GENERIC_ATTRIBUTE_SERVICE_CHANGED_VALUE, 0, NULL, NULL);
-
-    // ***** Primary service 'Generic Access'
-    mico_bt_peripheral_ext_attribute_add(HDLC_GENERIC_ACCESS_DEVICE_NAME_VALUE,
-                                         (uint16_t) strlen((char *) mico_bt_cfg_settings.device_name),
-                                         mico_bt_cfg_settings.device_name, NULL);
-    mico_bt_peripheral_ext_attribute_add(HDLC_GENERIC_ACCESS_APPEARANCE_VALUE, sizeof(hello_sensor_appearance_name),
-                                         hello_sensor_appearance_name, NULL);
-
-    // ***** Primary service 'Device info'
-    mico_bt_peripheral_ext_attribute_add(HDLC_DEV_INFO_MFR_NAME_VALUE, 5, (uint8_t *) "hello", NULL);
-    mico_bt_peripheral_ext_attribute_add(HDLC_DEV_INFO_MODEL_NUM_VALUE, (uint16_t) strlen((char *) MODEL),
-                                         (uint8_t *) MODEL, NULL);
-    mico_bt_peripheral_ext_attribute_add(HDLC_DEV_INFO_SYSTEM_ID_VALUE, sizeof(hello_sensor_char_system_id_value),
-                                         hello_sensor_char_system_id_value, NULL);
-
-    // ***** Primary service 'Battery'
-    mico_bt_peripheral_ext_attribute_add(HDLC_BAT_LEVEL_VALUE, 0, NULL, battery_level_callback);
-
-    // ***** Primary service 'Hello' (Vender specific)
-    hello_notify_indicate_attribute = mico_bt_peripheral_ext_attribute_add(HDLC_HELLO_SENSOR_NOTIFY_VALUE, 0, NULL,
-                                                                           notification_char_callback);
-    mico_bt_peripheral_ext_attribute_add(HDLC_HELLO_SENSOR_NOTIFY_CFG_DESC, 2,
-                                         (uint8_t *) &hello_sensor_hostinfo.characteristic_client_configuration,
-                                         char_cfg_callback);
-
-    mico_bt_peripheral_ext_attribute_add(HDLC_HELLO_SENSOR_COLOR_VALUE, 0, NULL, color_val_callback);
-
-    mico_bt_peripheral_ext_attribute_find_by_handle(HDLC_HELLO_SENSOR_NOTIFY_VALUE, &hello_notify_indicate_attribute);
-}
-
-/* TX Power report handler */
-static void hello_sensor_tx_power_callback(mico_bt_tx_power_result_t *p_tx_power)
-{
-    if ((p_tx_power->status == MICO_BT_SUCCESS) && (p_tx_power->hci_status == HCI_SUCCESS)) {
-        hello_sensor_log("Local TX: %d", p_tx_power->tx_power);
-    } else {
-        hello_sensor_log("Unable to read Local TX power. (btm_status=0x%x, hci_status=0x%x)",
-                         p_tx_power->status, p_tx_power->hci_status);
+    size_t i;
+    for (i = 0; i < sizeof(gatt_user_attributes) / sizeof(gatt_user_attributes[0]); i++) {
+        if (gatt_user_attributes[i].handle == handle) {
+            return (&gatt_user_attributes[i]);
+        }
     }
+    HELLO_PERIPHERAL_LOG("attribute not found:%x", handle);
+    return NULL;
 }
 
-/* RSSI report handler */
-static void hello_sensor_rssi_callback(mico_bt_dev_rssi_result_t *p_rssi)
+/*
+ * Process Read request or command from peer device
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatt_server_read_request_handler(uint16_t              conn_id,
+                                              mico_bt_gatt_read_t  *p_read_data)
 {
-    if ((p_rssi->status == MICO_BT_SUCCESS) && (p_rssi->hci_status == HCI_SUCCESS)) {
-        hello_sensor_log("RSSI: %d", p_rssi->rssi);
-        memset(oled_show_line, 0, sizeof(oled_show_line));
-        snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, " RSSI: %4d  ", p_rssi->rssi);
-        OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_3, oled_show_line);
-    } else {
-        hello_sensor_log("Unable to read RSSI. (btm_status=0x%x, hci_status=0x%x)",
-                         p_rssi->status, p_rssi->hci_status);
+    attribute_t *puAttribute;
+    int attr_len_to_copy;
+
+    if ((puAttribute = hello_sensor_get_attribute(p_read_data->handle)) == NULL) {
+        HELLO_PERIPHERAL_LOG("read_hndlr attr not found hdl:%x", p_read_data->handle);
+        return MICO_BT_GATT_INVALID_HANDLE;
     }
+
+    /* Dummy battery value read increment */
+    if (p_read_data->handle == HANDLE_HSENS_BATTERY_SERVICE_CHAR_LEVEL_VAL) {
+        if (hello_sensor_state.battery_level++ > 99) {
+            hello_sensor_state.battery_level = 0;
+        }
+    }
+
+    if (p_read_data->handle == HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL) {
+        puAttribute->p_attr = &hello_sensor_write;
+        puAttribute->attr_len = sizeof(hello_sensor_write);
+    }
+    attr_len_to_copy = puAttribute->attr_len;
+
+    HELLO_PERIPHERAL_LOG("read_hndlr conn_id:%d hdl:%x offset:%d len:%d",
+                         conn_id, p_read_data->handle, p_read_data->offset,
+                         attr_len_to_copy);
+
+    if (p_read_data->offset >= puAttribute->attr_len) {
+        attr_len_to_copy = 0;
+    }
+
+    if (attr_len_to_copy != 0) {
+        uint8_t *from;
+        int to_copy = attr_len_to_copy - p_read_data->offset;
+
+        if (to_copy > *p_read_data->p_val_len) {
+            to_copy = *p_read_data->p_val_len;
+        }
+
+        from = ((uint8_t *)puAttribute->p_attr) + p_read_data->offset;
+        *p_read_data->p_val_len = (uint16_t)to_copy;
+
+        memcpy(p_read_data->p_val, from, (size_t)to_copy);
+    }
+
+    return MICO_BT_GATT_SUCCESS;
 }
 
-
-OSStatus connection_handler(mico_bt_peripheral_socket_t *socket)
+/*
+ * Process write request or write command from peer device
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatt_server_write_request_handler(uint16_t conn_id,
+                                               mico_bt_gatt_write_t *p_data)
 {
-    OSStatus result;
+    mico_bt_gatt_status_t   result = MICO_BT_GATT_SUCCESS;
+    uint8_t                 *p_attr = p_data->p_val;
+    uint8_t                 attribute_value = *(uint8_t *)p_data->p_val;
 
-    hello_sensor_log("hello_sensor_conn_up id:0x%4x:", socket->connection_handle);
+    HELLO_PERIPHERAL_LOG("write_handler: conn_id:%d hdl:0x%x prep:%d offset:%d len:%d ", conn_id,
+                         p_data->handle, p_data->is_prep, p_data->offset, p_data->val_len);
+
+    switch (p_data->handle) {
+        /* By writing into Characteristic Client Configuration descriptor
+         * peer can enable or disable notification or indication
+         */
+        case HANDLE_HSENS_SERVICE_CHAR_CFG_DESC:
+            if (p_data->val_len != 2) {
+                return MICO_BT_GATT_INVALID_ATTR_LEN;
+            }
+            hello_sensor_hostinfo.characteristic_client_configuration = p_attr[0] | (p_attr[1] << 8);
+            break;
+
+        case HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL:
+            if (p_data->val_len != 1) {
+                return MICO_BT_GATT_INVALID_ATTR_LEN;
+            }
+            hello_sensor_hostinfo.color_idx = p_attr[0];
+            if (hello_sensor_hostinfo.color_idx != 0) {
+                HELLO_PERIPHERAL_LOG("hello_sensor_write_handler:LED Color: %d",
+                                     hello_sensor_hostinfo.color_idx);
+            }
+
+            /* Read RSSI */
+            mico_bt_dev_read_rssi(hello_sensor_hostinfo.bdaddr, BT_TRANSPORT_LE, hello_sensor_rssi_callback);
+
+            /* Change LED Color */
+            hsb2rgb_led_open((hello_sensor_hostinfo.color_idx * 60) % 360, 100, 50);
+            /* State Changed */
+            memset(oled_show_line, 0, sizeof(oled_show_line));
+            snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "Color: 0x%02x",
+                     hello_sensor_hostinfo.color_idx);
+            OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_4, oled_show_line);
+
+            hello_sensor_write = attribute_value;
+            HELLO_PERIPHERAL_LOG("The value written is: %i", attribute_value);
+            break;
+
+        default:
+            result = MICO_BT_GATT_INVALID_HANDLE;
+            break;
+    }
+    return result;
+}
+
+/*
+ * Write Execute Procedure
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatt_server_write_and_execute_request_handler(uint16_t conn_id,
+                                                           mico_bt_gatt_exec_flag_t exec_flag)
+{
+    HELLO_PERIPHERAL_LOG("write exec: flag:%d", exec_flag);
+    return MICO_BT_GATT_SUCCESS;
+}
+
+/*
+ * Process MTU request from the peer
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatt_server_mtu_request_handler(uint16_t conn_id, uint16_t mtu)
+{
+    HELLO_PERIPHERAL_LOG("req_mtu: %d", mtu);
+    return MICO_BT_GATT_SUCCESS;
+}
+
+static mico_bt_gatt_status_t
+hello_sensor_gatt_server_confirmation_handler(uint16_t conn_id,
+                                              uint16_t handle)
+{
+    HELLO_PERIPHERAL_LOG("hello_sensor_indication_confirmation, conn %d hdl %d", conn_id, handle);
+
+    if (!hello_sensor_state.flag_indication_sent) {
+        HELLO_PERIPHERAL_LOG("Hello: Wrong Confirmation!");
+        return MICO_BT_GATT_SUCCESS;
+    }
+    hello_sensor_state.flag_indication_sent = 0;
+
+    return MICO_BT_GATT_SUCCESS;
+}
+
+/* This function is invoked when connection is established */
+static mico_bt_gatt_status_t
+hello_sensor_gatts_connection_up(mico_bt_gatt_connection_status_t *p_status)
+{
+    mico_bt_result_t result;
+
+    HELLO_PERIPHERAL_LOG("hello_sensor_conn_up  id:%d:", p_status->conn_id);
+
+    /* Update the connection handler.  Save address of the connected device. */
+    hello_sensor_state.conn_id = p_status->conn_id;
+    memcpy(hello_sensor_state.remote_addr, p_status->bd_addr, sizeof(BD_ADDR));
 
     /* Stop advertising */
-    result = mico_bt_peripheral_stop_advertisements();
-    hello_sensor_log("Stopping Advertisements: %d", result);
+    result = mico_bt_start_advertisements(BTM_BLE_ADVERT_OFF, 0, NULL);
+
+    HELLO_PERIPHERAL_LOG("Stopping Advertisements%d", result);
+
+    memcpy(hello_sensor_hostinfo.bdaddr, p_status->bd_addr, sizeof(BD_ADDR));
+    hello_sensor_hostinfo.characteristic_client_configuration = 0;
+    hello_sensor_hostinfo.color_idx = 0;
 
     /* Connected */
     memset(oled_show_line, 0, sizeof(oled_show_line));
     snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "   CONNECTED    ");
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_2, oled_show_line);
 
-    mico_bt_dev_read_tx_power(socket->remote_device.address,
-                              BT_TRANSPORT_LE,
-                              (mico_bt_dev_cmpl_cback_t *) hello_sensor_tx_power_callback);
-
-    hello_sensor_hostinfo.characteristic_client_configuration = GATT_CLIENT_CONFIG_NONE;
-    hello_sensor_hostinfo.service_changed = 1;
-
-    return kNoErr;
+    return MICO_BT_GATT_SUCCESS;
 }
 
-OSStatus disconnection_handler(mico_bt_peripheral_socket_t *socket)
+/*
+ * This function is invoked when connection is lost
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatts_connection_down(mico_bt_gatt_connection_status_t *p_status)
 {
-    OSStatus result;
+    mico_bt_result_t result;
 
-    UNUSED_PARAMETER(socket);
+    HELLO_PERIPHERAL_LOG("connection_down  conn_id:%d reason:%d",
+                         p_status->conn_id, p_status->reason);
 
-    hello_sensor_log("hello_sensor_conn_down id:0x%4x:", socket->connection_handle);
+    /* Resetting the device info */
+    memset(hello_sensor_state.remote_addr, 0, 6);
+    hello_sensor_state.conn_id = 0;
 
     memset(oled_show_line, 0, sizeof(oled_show_line));
-    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Sensor Demo");
+    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Hello Sensor");
     OLED_Clear();
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
 
@@ -479,10 +668,8 @@ OSStatus disconnection_handler(mico_bt_peripheral_socket_t *socket)
      * can connect when it wakes up
      */
     if (hello_sensor_state.flag_stay_connected) {
-        advertising_settings.use_high_duty = TRUE;
-        result = mico_bt_peripheral_start_advertisements(&advertising_settings, advertisement_complete_handle);
-        hello_sensor_log("mico_bt_start_advertisements %d", result);
-
+        result = mico_bt_start_advertisements(BTM_BLE_ADVERT_UNDIRECTED_LOW, 0, NULL);
+        HELLO_PERIPHERAL_LOG("mico_bt_start_advertisements %d", result);
         snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "  ADVERTISING   ");
     } else {
         snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "  DISCONNECTED  ");
@@ -490,88 +677,107 @@ OSStatus disconnection_handler(mico_bt_peripheral_socket_t *socket)
 
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_2, oled_show_line);
 
-    return kNoErr;
-}
-
-mico_bt_gatt_status_t color_val_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op)
-{
-    if (op == GATTS_REQ_TYPE_READ) {
-        hello_sensor_log("hello_sensor_read_handler: led_color_idx: %d", hello_sensor_state.led_color_idx);
-        mico_bt_peripheral_ext_attribute_value_write(attribute, 1, 0, &hello_sensor_state.led_color_idx);
-        return MICO_BT_GATT_SUCCESS;
-    } else if (op == GATTS_REQ_TYPE_WRITE) {
-        if (attribute->value_length != 1) {
-            return MICO_BT_GATT_INVALID_ATTR_LEN;
-        }
-        hello_sensor_state.led_color_idx = attribute->p_value[0];
-        hello_sensor_log("hello_sensor_write_handler: led_color_idx: %d", hello_sensor_state.led_color_idx);
-        mico_bt_dev_read_rssi(peripheral_socket.remote_device.address, BT_TRANSPORT_LE,
-                              (mico_bt_dev_cmpl_cback_t *) hello_sensor_rssi_callback);
-
-        hsb2rgb_led_open( (hello_sensor_state.led_color_idx * 60) % 360 , 100, 50);
-
-        memset(oled_show_line, 0, sizeof(oled_show_line));
-        snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "Color: 0x%02x", hello_sensor_state.led_color_idx);
-        OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_4, oled_show_line);
-
-        return MICO_BT_GATT_SUCCESS;
-    } else {
-        return MICO_BT_GATT_ERROR;
-    }
-}
-
-static mico_bt_gatt_status_t
-notification_char_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op)
-{
-    uint8_t *p_attr;
-
-    if (op == GATTS_REQ_TYPE_READ) {
-        /* If client has not registered for indication or notification, no action */
-        if (hello_sensor_hostinfo.characteristic_client_configuration == 0) {
-            p_attr = (uint8_t *) hello_sensor_char_disable_value;
-            mico_bt_peripheral_ext_attribute_value_write(attribute, sizeof(hello_sensor_char_disable_value), 0, p_attr);
-        } else if (hello_sensor_hostinfo.characteristic_client_configuration & GATT_CLIENT_CONFIG_NOTIFICATION) {
-            p_attr = (uint8_t *) hello_sensor_char_notify_value;
-            mico_bt_peripheral_ext_attribute_value_write(attribute, sizeof(hello_sensor_char_notify_value), 0, p_attr);
-        } else {
-            p_attr = (uint8_t *) hello_sensor_char_indicate_value;
-            mico_bt_peripheral_ext_attribute_value_write(attribute, sizeof(hello_sensor_char_indicate_value), 0,
-                                                         p_attr);
-        }
-        return MICO_BT_GATT_SUCCESS;
-    } else
-        return MICO_BT_GATT_ERROR;
-}
-
-mico_bt_gatt_status_t char_cfg_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op)
-{
-
-    if (op == GATTS_REQ_TYPE_READ) {
-        return MICO_BT_GATT_SUCCESS;
-    } else if (op == GATTS_REQ_TYPE_WRITE) {
-        if (attribute->value_length != 2) {
-            return MICO_BT_GATT_INVALID_ATTR_LEN;
-        }
-        hello_sensor_hostinfo.characteristic_client_configuration =
-                attribute->p_value[0] | (attribute->p_value[1] << 8);
-        return MICO_BT_GATT_SUCCESS;
-    } else {
-        return MICO_BT_GATT_ERROR;
-    }
+    return MICO_BT_SUCCESS;
 }
 
 /*
- * Demo battery functions
+ * Connection up/down event
  */
-mico_bt_gatt_status_t battery_level_callback(mico_bt_ext_attribute_value_t *attribute, mico_bt_gatt_request_type_t op)
+static mico_bt_gatt_status_t
+hello_sensor_gatts_connection_status_handler(mico_bt_gatt_connection_status_t *p_status)
 {
-    if (op == GATTS_REQ_TYPE_READ) {
-        hello_sensor_state.battery_level = (hello_sensor_state.battery_level + 1) % 100;
-        hello_sensor_log("Read battery level %d", hello_sensor_state.battery_level);
-        mico_bt_peripheral_ext_attribute_value_write(attribute, 1, 0, &hello_sensor_state.battery_level);
-        return MICO_BT_GATT_SUCCESS;
+    is_connected = p_status->connected;
+    if (p_status->connected) {
+        return hello_sensor_gatts_connection_up(p_status);
     }
-    return MICO_BT_GATT_ERROR;
+
+    return hello_sensor_gatts_connection_down(p_status);
+}
+
+/*
+ * Process GATT request from the peer
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatt_server_request_handler(mico_bt_gatt_attribute_request_t *p_data)
+{
+    mico_bt_gatt_status_t result = MICO_BT_GATT_INVALID_PDU;
+
+    HELLO_PERIPHERAL_LOG("hello_sensor_gatt_server_request_handler. conn %d, type %d",
+                         p_data->conn_id, p_data->request_type);
+
+    switch (p_data->request_type) {
+        case GATTS_REQ_TYPE_READ:
+            result = hello_sensor_gatt_server_read_request_handler(
+                    p_data->conn_id, &(p_data->data.read_req));
+            break;
+
+        case GATTS_REQ_TYPE_WRITE:
+            result = hello_sensor_gatt_server_write_request_handler(
+                    p_data->conn_id, &(p_data->data.write_req));
+            break;
+
+        case GATTS_REQ_TYPE_WRITE_EXEC:
+            result = hello_sensor_gatt_server_write_and_execute_request_handler(
+                    p_data->conn_id, p_data->data.exec_write);
+            break;
+
+        case GATTS_REQ_TYPE_MTU:
+            result = hello_sensor_gatt_server_mtu_request_handler(p_data->conn_id,
+                                                                  p_data->data.mtu);
+            break;
+
+        case GATTS_REQ_TYPE_CONF:
+            result = hello_sensor_gatt_server_confirmation_handler(p_data->conn_id,
+                                                                   p_data->data.handle);
+            break;
+
+        default:
+            break;
+    }
+    return result;
+}
+
+/*
+ * Callback for various GATT events.  As this application performs only as a
+ * GATT server, some of
+ * the events are ommitted.
+ */
+static mico_bt_gatt_status_t
+hello_sensor_gatts_callback(mico_bt_gatt_evt_t event,
+                            mico_bt_gatt_event_data_t *p_data)
+{
+    mico_bt_gatt_status_t result = MICO_BT_GATT_INVALID_PDU;
+
+    switch (event) {
+        case GATT_CONNECTION_STATUS_EVT:
+            result = hello_sensor_gatts_connection_status_handler(&p_data->connection_status);
+            break;
+
+        case GATT_ATTRIBUTE_REQUEST_EVT:
+            result = hello_sensor_gatt_server_request_handler(&p_data->attribute_request);
+            break;
+
+        default:
+            break;
+    }
+
+    return result;
+}
+
+/**
+ * RSSI Value
+ */
+static void hello_sensor_rssi_callback(void *arg)
+{
+    mico_bt_dev_rssi_result_t *p_rssi = (mico_bt_dev_rssi_result_t *)arg;
+
+    if (p_rssi->status == MICO_BT_SUCCESS && p_rssi->hci_status == HCI_SUCCESS) {
+        HELLO_PERIPHERAL_LOG("RSSI: %d", p_rssi->rssi);
+
+        memset(oled_show_line, 0, sizeof(oled_show_line));
+        snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "RSSI : %4d", p_rssi->rssi);
+        OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_3, oled_show_line);
+    }
 }
 
 /**

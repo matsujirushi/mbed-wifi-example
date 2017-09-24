@@ -33,520 +33,449 @@
 #include <string.h>
 
 #include "mico.h"
-#include "mico_bt.h"
+#include "mico_bt_ble.h"
+#include "mico_bt_gatt.h"
 #include "mico_bt_cfg.h"
-#include "mico_bt_smartbridge.h"
-
-#include "oled.h"
+#include "mico_bt_stack.h"
 
 #include "StringUtils.h"
 
-/******************************************************
- *                      Macros
- ******************************************************/
-#define hello_center_log(M, ...) custom_log("LE Center", M, ##__VA_ARGS__)
+#include "oled.h"
 
-/******************************************************
- *                    Constants
- ******************************************************/
+#include "ble_hello_center.h"
 
-#define MAX_CONCURRENT_CONNECTIONS          (10)
+/******************************************************************************
+ *                                Constants
+******************************************************************************/
 
-#define MAX_ATTRIBUTE_CACHE_COUNTS          (10)
+#define HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL 0x2d
 
-#define OUT_OF_BAND_AUTHENTICATION          BT_SMART_OOB_AUTH_NONE
+#define HELLO_PERIPHERAL_LOG(fmt, ...) custom_log("HELLO", fmt, ##__VA_ARGS__)
 
-#define AUTHENTICATION_REQUIREMENTS         BT_SMART_AUTH_REQ_BONDING
+/******************************************************************************
+ *                                Structures
+ ******************************************************************************/
 
-/* UUID value of the Hello Sensor Service */
-#define UUID_HELLO_SERVICE                  0x23, 0x20, 0x56, 0x7c, 0x05, 0xcf, 0x6e, 0xb4, 0xc3, 0x41, 0x77, 0x28, 0x51, 0x82, 0x7e, 0x1b
-
-/* UUID value of the Hello Sensor Characteristic, Value Notification */
-#define UUID_HELLO_CHARACTERISTIC_NOTIFY    0x26, 0xf6, 0x69, 0x91, 0x68, 0xee, 0xc2, 0xbe, 0x44, 0x4d, 0xb9, 0x5c, 0x3f, 0x2d, 0xc3, 0x8a
-
-/* UUID value of the Hello Sensor Characteristic, Color Configuration */
-#define UUID_HELLO_CHARACTERISTIC_COLOR     0x1a, 0x89, 0x07, 0x4a, 0x2f, 0x3b, 0x7e, 0xa6, 0x81, 0x44, 0x3f, 0xf9, 0xa8, 0xf2, 0x9b, 0x5e
-
-
-#define LENGTH_HELLO_CHARACTERISTIC_COLOR   (1)
-
-
-/******************************************************
- *                   Enumerations
- ******************************************************/
-
-/******************************************************
- *                 Type Definitions
- ******************************************************/
-
-/* Device info ready to connect */
+/**
+ *  Bluetooth Smart device
+ */
 typedef struct {
-    linked_list_node_t      this_node;     /* Linked-list node of this deivice */
-    mico_bt_smart_device_t  device;        /* Remote BT device */
-} connecting_device_t;
+    mico_bt_device_address_t    address;      /**< Bluetooth device address */
+    uint8_t                     addr_type;    /**< Bluetooth device address type */
+    char                        name[31];     /**< User-friendly name       */
+    uint16_t                    conn_id;      /**< Connection ID */
+} hello_center_device_t;
 
-/******************************************************
- *                    Structures
- ******************************************************/
+/******************************************************************************
+ *                           Function Prototypes
+ ******************************************************************************/
 
-/* SmartBridge security settings */
-const mico_bt_smart_security_settings_t security_settings = {
-    .timeout_second              = 15,
-    .io_capabilities             = BT_SMART_IO_DISPLAY_ONLY,
-    .authentication_requirements = AUTHENTICATION_REQUIREMENTS,
-    .oob_authentication          = OUT_OF_BAND_AUTHENTICATION,
-    .max_encryption_key_size     = 16,
-    .master_key_distribution     = BT_SMART_DISTRIBUTE_ENCRYPTION_AND_SIGN_KEYS,
-    .slave_key_distribution      = BT_SMART_DISTRIBUTE_ALL_KEYS,
-};
+static void hello_center_application_init();
 
-/* SmartBridge connection settings */
-static const mico_bt_smart_connection_settings_t connection_settings = {
-    .timeout_second                = 10,
-    .filter_policy                 = FILTER_POLICY_NONE,
-    .interval_min                  = MICO_BT_CFG_DEFAULT_CONN_MIN_INTERVAL,
-    .interval_max                  = MICO_BT_CFG_DEFAULT_CONN_MAX_INTERVAL,
-    .latency                       = MICO_BT_CFG_DEFAULT_CONN_LATENCY,
-    .supervision_timeout           = MICO_BT_CFG_DEFAULT_CONN_SUPERVISION_TIMEOUT,
-    .ce_length_min                 = 0,
-    .ce_length_max                 = 0,
-    .attribute_protocol_timeout_ms = 10000,
-};
+static void hello_center_scan_result_callback(mico_bt_ble_scan_results_t *p_adv_result, uint8_t *p_adv_data);
+static mico_bt_result_t hello_center_management_callback(mico_bt_management_evt_t event, mico_bt_management_evt_data_t *p_event_data);
+static mico_bt_gatt_status_t hello_center_gatts_connection_status_handler(mico_bt_gatt_connection_status_t *p_status);
+static mico_bt_gatt_status_t hello_center_gatts_connection_up(mico_bt_gatt_connection_status_t *p_status);
+static mico_bt_gatt_status_t hello_center_gatts_connection_down(mico_bt_gatt_connection_status_t *p_status);
+static mico_bt_gatt_status_t hello_center_gatts_callback(mico_bt_gatt_evt_t event, mico_bt_gatt_event_data_t *p_data);
 
-/* SmartBridge auto scan settings */
-static const mico_bt_smart_scan_settings_t scan_settings = {
-    .type              = BT_SMART_PASSIVE_SCAN,
-    .filter_policy     = FILTER_POLICY_NONE,
-    .filter_duplicates = DUPLICATES_FILTER_ENABLED,
-    .interval          = 512,
-    .window            = 48,
-    .duration_second   = 10,
-};
+static OSStatus hello_center_handle_async_scanning_stop_event(void *arg);
+static OSStatus hello_center_handle_async_connect_request(void *arg);
+static OSStatus hello_center_handle_async_conn_up(void *arg);
+static OSStatus hello_center_handle_async_conn_down(void *arg);
+static OSStatus hello_center_handle_async_timer_event(void *arg);
 
-/******************************************************
- *               Static Function Declarations
- ******************************************************/
-static OSStatus connect_handler(void *arg);
+/******************************************************************************
+ *                                Variables Definitions
+ ******************************************************************************/
 
-static OSStatus disconnection_handler(mico_bt_smartbridge_socket_t *socket);
-
-static OSStatus notification_handler(mico_bt_smartbridge_socket_t *socket, uint16_t attribute_handle);
-
-static OSStatus scan_complete_handler(void *arg);
-
-static OSStatus scan_result_handler(const mico_bt_smart_advertising_report_t *result);
-
-static OSStatus sensor_trigger_handler_t(void *arg);
-
-/* Remote device list management */
-static OSStatus connect_list_init();
-
-static OSStatus connect_list_add(mico_bt_smart_device_t remote_device);
-
-static OSStatus connect_list_get(mico_bt_smart_device_t **address);
-
-static OSStatus connect_list_remove(mico_bt_smart_device_t *device);
-
-/******************************************************
- *               Function Declarations
- ******************************************************/
-
-/******************************************************
- *               Variable Definitions
- ******************************************************/
-
-/* Name of desired peer device to connect to */
-const char desired_peer_device[] = "AZ3239_SENSOR";
-
-/* Service for operation */
-const mico_bt_uuid_t hello_service_uuid = {
-    .len = LEN_UUID_128,
-    .uu = {
-        .uuid128 = { UUID_HELLO_SERVICE },
-    },
-};
-
-/* Characteristic for MiCOKit led control */
-const mico_bt_uuid_t hello_color_uuid = {
-    .len = LEN_UUID_128,
-    .uu = {
-        .uuid128 = { UUID_HELLO_CHARACTERISTIC_COLOR },
-    },
-};
-
-/* Sockets to manage connections */
-static mico_bt_smartbridge_socket_t smartbridge_socket[MAX_CONCURRENT_CONNECTIONS];
-/* Handles to manage characteristic for each connection */
-static uint16_t hello_color_value_handle[MAX_CONCURRENT_CONNECTIONS];
-
-/* Worker thread to manage connection events */
-static mico_worker_thread_t hello_center_worker_thread;
-
-/* Worker thread to manage timed event for MiCOKit led control */
-static mico_worker_thread_t hello_sensor_color_toggle_worker_thread;
-static mico_timed_event_t hello_sensor_color_toggle_event;
-
-/* Currnet color index for every connected MiCOKit */
-static uint8_t color_idx = 0;
-static linked_list_t connecting_device_list;
-
-static uint8_t hello_sensor_devices = 0;
+static char peer_device[] = DEFAULT_NAME;
 static char oled_show_line[OLED_DISPLAY_MAX_CHAR_PER_ROW + 1] = { '\0' };   // max char each line
 
-/******************************************************
- *               Function Definitions
- ******************************************************/
-int app_ble_hello_center()
+static mico_worker_thread_t     hello_center_worker_thread;
+static mico_worker_thread_t     hello_center_timer_worker_thread;
+static mico_timed_event_t       hello_center_time_event;
+
+static hello_center_device_t   *hello_center_current_device = NULL;
+static mico_semaphore_t         hello_center_write_op_sem;
+
+/******************************************************************************
+ *                          Function Definitions
+ ******************************************************************************/
+
+/*
+ *  Entry point to the application. Set device configuration and start BT
+ *  stack initialization.  The actual application initialization will happen
+ *  when stack reports that BT device is ready.
+ */
+
+void app_ble_hello_center()
 {
-    OSStatus err = kNoErr;
-    uint32_t a;
+    OSStatus         err;
+    mico_bt_result_t result;
+
+    mico_system_context_init(0);
 
     OLED_Init();
 
-    /* mico system initialize */
-    mico_system_context_init(0);
-
-    hello_center_log("ble_hello_center initialising...");
+    HELLO_PERIPHERAL_LOG("Hello Center Start");
     snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE starting ...");
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
 
-    /* Initialise MiCO Bluetooth Framework */
-    err = mico_bt_init(MICO_BT_HCI_MODE, DEFAULT_NAME, MAX_CONCURRENT_CONNECTIONS, 1);  //Client + server connections
-    require_noerr_string(err, exit, "Error initialising MiCO Bluetooth Framework");
+    /* Register call back and configuration with stack */
+    result = mico_bt_stack_init(hello_center_management_callback,
+                                &mico_bt_cfg_settings_peripheral,
+                                mico_bt_cfg_buf_pools_peripheral);
+    if (result != MICO_BT_SUCCESS) {
+        HELLO_PERIPHERAL_LOG("Bluetooth Stack initialised failed");
+        goto exit1;
+    }
 
+    /* Initialise other section */
+    err = mico_rtos_create_worker_thread(&hello_center_worker_thread, MICO_APPLICATION_PRIORITY, 2048, 10);
+    require_noerr_string(err, exit1, "Create worker thread failed");
 
-    /* Initialise MiCO SmartBridge */
-    err = mico_bt_smartbridge_init(MAX_CONCURRENT_CONNECTIONS);
-    require_noerr(err, exit);
+    err = mico_rtos_create_worker_thread(&hello_center_timer_worker_thread, MICO_APPLICATION_PRIORITY, 2048, 1);
+    require_noerr_string(err, exit2, "Create worker thread for timer failed");
 
-    hello_center_log("ble_hello_center initialised success");
+    return;
+
+exit2:
+    mico_rtos_delete_worker_thread(&hello_center_worker_thread);
+exit1:
+    memset(oled_show_line, 0, sizeof(oled_show_line));
+    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE init failed");
+    OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
+}
+
+/*
+ * This function is executed in the BTM_ENABLED_EVT management callback.
+ */
+static void hello_center_application_init()
+{
+    mico_bt_gatt_status_t gatt_status;
+    mico_bt_result_t      result;
+
+    HELLO_PERIPHERAL_LOG("hello_center_application_init");
+    /* Started */
     memset(oled_show_line, 0, sizeof(oled_show_line));
     snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Hello Center");
+    OLED_Clear();
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
 
-    /* Enable Attribute Cache and set maximum number of caches */
-    err = mico_bt_smartbridge_enable_attribute_cache(MAX_ATTRIBUTE_CACHE_COUNTS,
-                                                     (mico_bt_uuid_t *) &hello_service_uuid,
-                                                     1);
-    require_noerr_string(err, exit, "Failed to enable ATT Cache");
+    /* Register with stack to receive GATT callback */
+    gatt_status = mico_bt_gatt_register(GATT_IF_CLIENT, hello_center_gatts_callback);
+    HELLO_PERIPHERAL_LOG("mico_bt_gatt_register: %d", gatt_status);
 
-    /* Create all sockets and make them ready to connect. A socket can connect and disconnect multiple times. */
-    for (a = 0; a < MAX_CONCURRENT_CONNECTIONS; a++) {
-        mico_bt_smartbridge_create_socket(&smartbridge_socket[a]);
+    /* Start scanning procedure. */
+    result = mico_bt_ble_scan(BTM_BLE_SCAN_TYPE_HIGH_DUTY, MICO_TRUE, hello_center_scan_result_callback);
+    if (MICO_BT_PENDING != result) {
+        HELLO_PERIPHERAL_LOG("mico_bt_ble_scan failed");
+        return;
+    }
+    HELLO_PERIPHERAL_LOG("Start to scan %d", result);
+
+    /* Advertising */
+    memset(oled_show_line, 0, sizeof(oled_show_line));
+    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "    SCANNING    ");
+    OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_2, oled_show_line);
+}
+
+/*
+ * hello_center scanning report callback
+ */
+static void
+hello_center_scan_result_callback(mico_bt_ble_scan_results_t *p_adv_result, uint8_t *p_adv_data)
+{
+#if 0
+    if (p_adv_result != NULL) {
+        HELLO_PERIPHERAL_LOG("ADDR: %s  RSSI: %d",
+                             DataToHexStringWithColons(p_adv_result->remote_bd_addr, 6),
+                             p_adv_result->rssi);
+    }
+#endif
+
+    if (!hello_center_current_device && p_adv_result != NULL && p_adv_result->length > 0) {
+        uint8_t data_length = 0;
+        uint8_t *name = mico_bt_ble_check_advertising_data(p_adv_data,
+                                                           BTM_BLE_ADVERT_TYPE_NAME_COMPLETE,
+                                                           &data_length);
+        if (name != NULL && data_length != 0) {
+            if (memcmp(name, peer_device, strlen(peer_device)) == 0) {
+                hello_center_current_device = (hello_center_device_t *)malloc(sizeof(hello_center_device_t));
+                if (hello_center_current_device != NULL) {
+                    /* Prepare to connect it. */
+                    memset(hello_center_current_device, 0, sizeof(hello_center_device_t));
+                    hello_center_current_device->addr_type = p_adv_result->ble_evt_type;
+                    memcpy(hello_center_current_device->address, p_adv_result->remote_bd_addr, 6);
+                    memcpy(hello_center_current_device->name, name, MIN(sizeof(hello_center_current_device->name), data_length));
+                    OSStatus err = mico_rtos_send_asynchronous_event(&hello_center_worker_thread,
+                                                                     hello_center_handle_async_connect_request,
+                                                                     hello_center_current_device);
+                    if (err != kNoErr) {
+                        free(hello_center_current_device);
+                        hello_center_current_device = NULL;
+                    }
+                } else {
+                    HELLO_PERIPHERAL_LOG("%s: malloc(hello_center_device_t) failed", __FUNCTION__);
+                }
+            }
+        }
+    } else if (p_adv_result == NULL) {
+        mico_rtos_send_asynchronous_event(&hello_center_worker_thread,
+                                          hello_center_handle_async_scanning_stop_event,
+                                          NULL);
+    }
+}
+
+/*
+ * hello_sensor bt/ble link management callback
+ */
+static mico_bt_result_t
+hello_center_management_callback(mico_bt_management_evt_t event,
+                                 mico_bt_management_evt_data_t *p_event_data)
+{
+    mico_bt_result_t result = MICO_BT_SUCCESS;
+    mico_bt_dev_ble_pairing_info_t *p_info;
+    mico_bt_ble_scan_type_t scan_type;
+
+    HELLO_PERIPHERAL_LOG("hello_center_management_callback: %x", event);
+
+    switch (event) {
+        /* Bluetooth  stack enabled */
+        case BTM_ENABLED_EVT:
+            hello_center_application_init();
+            break;
+
+        case BTM_DISABLED_EVT:
+            break;
+
+        case BTM_PAIRING_IO_CAPABILITIES_BLE_REQUEST_EVT:
+            p_event_data->pairing_io_capabilities_ble_request.local_io_cap  = BTM_IO_CAPABILITIES_NONE;
+            p_event_data->pairing_io_capabilities_ble_request.oob_data      = BTM_OOB_NONE;
+            p_event_data->pairing_io_capabilities_ble_request.auth_req      = BTM_LE_AUTH_REQ_BOND | BTM_LE_AUTH_REQ_MITM;
+            p_event_data->pairing_io_capabilities_ble_request.max_key_size  = 0x10;
+            p_event_data->pairing_io_capabilities_ble_request.init_keys     = BTM_LE_KEY_PENC | BTM_LE_KEY_PID;
+            p_event_data->pairing_io_capabilities_ble_request.resp_keys     = BTM_LE_KEY_PENC | BTM_LE_KEY_PID;
+            break;
+
+        case BTM_PAIRING_COMPLETE_EVT:
+            p_info = &p_event_data->pairing_complete.pairing_complete_info.ble;
+            HELLO_PERIPHERAL_LOG("Pairing Complete: %d", p_info->reason);
+            break;
+
+        case BTM_SECURITY_REQUEST_EVT:
+            mico_bt_ble_security_grant(p_event_data->security_request.bd_addr,
+                                       MICO_BT_SUCCESS);
+            break;
+
+
+        case BTM_BLE_SCAN_STATE_CHANGED_EVT:
+            scan_type = p_event_data->ble_scan_state_changed;
+            HELLO_PERIPHERAL_LOG("Scanning State change: %d", scan_type);
+            break;
+
+        default:
+            break;
     }
 
-    /* Create a worker thread for making a connection and control event */
-    mico_rtos_create_worker_thread(&hello_center_worker_thread, MICO_APPLICATION_PRIORITY, 2048, 1);
+    return result;
+}
 
-    mico_rtos_create_worker_thread(&hello_sensor_color_toggle_worker_thread, MICO_APPLICATION_PRIORITY, 2048, 1);
+/* This function is invoked when connection is established */
+static mico_bt_gatt_status_t
+hello_center_gatts_connection_up(mico_bt_gatt_connection_status_t *p_status)
+{
+    /* update connection status */
+    HELLO_PERIPHERAL_LOG("Connection Up :0x%04x", p_status->conn_id);
+    hello_center_current_device->conn_id = p_status->conn_id;
 
-    mico_rtos_register_timed_event(&hello_sensor_color_toggle_event,
-                                   &hello_sensor_color_toggle_worker_thread,
-                                   sensor_trigger_handler_t,
-                                   1000,
-                                   NULL);
+    mico_rtos_send_asynchronous_event(&hello_center_worker_thread,
+                                      hello_center_handle_async_conn_up,
+                                      NULL);
 
-    hello_center_log("Scanning for %s...\n", desired_peer_device);
+    return MICO_BT_GATT_SUCCESS;
+}
+
+/*
+ * This function is invoked when connection is lost
+ */
+static mico_bt_gatt_status_t
+hello_center_gatts_connection_down(mico_bt_gatt_connection_status_t *p_status)
+{
+    /* update connection status */
+    HELLO_PERIPHERAL_LOG("Connection down :0x%04x reason:%d",
+                         p_status->conn_id, p_status->reason);
+
+    mico_rtos_send_asynchronous_event(&hello_center_worker_thread,
+                                      hello_center_handle_async_conn_down,
+                                      NULL);
+
+    return MICO_BT_SUCCESS;
+}
+
+/*
+ * Connection up/down event
+ */
+static mico_bt_gatt_status_t
+hello_center_gatts_connection_status_handler(mico_bt_gatt_connection_status_t *p_status)
+{
+    if (p_status->connected) {
+        return hello_center_gatts_connection_up(p_status);
+    }
+
+    return hello_center_gatts_connection_down(p_status);
+}
+
+/*
+ * Callback for various GATT events.  As this application performs only as a
+ * GATT server, some of
+ * the events are ommitted.
+ */
+static mico_bt_gatt_status_t
+hello_center_gatts_callback(mico_bt_gatt_evt_t event,
+                            mico_bt_gatt_event_data_t *p_data)
+{
+    mico_bt_gatt_status_t result = MICO_BT_GATT_INVALID_PDU;
+
+    switch (event) {
+        case GATT_CONNECTION_STATUS_EVT:
+            result = hello_center_gatts_connection_status_handler(&p_data->connection_status);
+            break;
+
+        case GATT_OPERATION_CPLT_EVT:
+            if (p_data->operation_complete.op == GATTC_OPTYPE_WRITE) {
+#if 0
+                HELLO_PERIPHERAL_LOG("Write-callback event for handle: 0x%02x status: %d",
+                                     p_data->operation_complete.response_data.handle,
+                                     p_data->operation_complete.status);
+#endif
+                mico_rtos_set_semaphore(&hello_center_write_op_sem);
+            }
+            break;
+
+        case GATT_DISCOVERY_RESULT_EVT:
+            break;
+
+        case GATT_DISCOVERY_CPLT_EVT:
+            break;
+
+        default:
+            break;
+    }
+
+    return result;
+}
+
+static OSStatus hello_center_handle_async_scanning_stop_event(void *arg)
+{
+    UNUSED_PARAMETER(arg);
+
+    mico_bt_result_t result = mico_bt_ble_scan(BTM_BLE_SCAN_TYPE_HIGH_DUTY,
+                                               MICO_TRUE,
+                                               hello_center_scan_result_callback);
+    HELLO_PERIPHERAL_LOG("restart to scann: %d", result);
+
+    return kNoErr;
+}
+
+static OSStatus hello_center_handle_async_connect_request(void *arg)
+{
+    if (arg == NULL) return kGeneralErr;
+
+    /* Connection */
+    if (mico_bt_gatt_le_connect(hello_center_current_device->address,
+                                hello_center_current_device->addr_type,
+                                BTM_BLE_SCAN_TYPE_HIGH_DUTY,
+                                MICO_TRUE)) {
+        HELLO_PERIPHERAL_LOG("start to connect device: %s", hello_center_current_device->name);
+    } else {
+        free(hello_center_current_device);
+        hello_center_current_device = NULL;
+        HELLO_PERIPHERAL_LOG("connect to device failed");
+    }
+
+    return kNoErr;
+}
+
+static OSStatus hello_center_handle_async_conn_up(void *arg)
+{
+    OSStatus err;
+
+    UNUSED_PARAMETER(arg);
+
+    /* Todo discovery specified Service by UUID */
+
+    /* Now we used HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL to control ATT Server */
+    mico_rtos_init_semaphore(&hello_center_write_op_sem, 1);
+    err = mico_rtos_register_timed_event(&hello_center_time_event, &hello_center_timer_worker_thread,
+                                         hello_center_handle_async_timer_event, 1000, NULL);
+    require_noerr_string(err, exit, "Register Timer Event failed");
+
+    exit:
+    return kNoErr;
+}
+
+static OSStatus hello_center_handle_async_conn_down(void *arg)
+{
+    UNUSED_PARAMETER(arg);
+
+    if (hello_center_current_device) {
+        free(hello_center_current_device);
+        hello_center_current_device = NULL;
+    }
+
+    /* De-init resource */
+    mico_rtos_deregister_timed_event(&hello_center_time_event);
+    mico_rtos_deinit_semaphore(&hello_center_write_op_sem);
+
+    /* Clear OLED */
     memset(oled_show_line, 0, sizeof(oled_show_line));
-    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "   SCANNING   ");
+    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "BLE Hello Center");
+    OLED_Clear();
+    OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_1, oled_show_line);
+
+    memset(oled_show_line, 0, sizeof(oled_show_line));
+    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "%s", "    SCANNING    ");
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_2, oled_show_line);
 
-    err = connect_list_init();
-    require_noerr(err, exit);
-
-    mico_bt_smartbridge_start_scan(&scan_settings, scan_complete_handler, scan_result_handler);
-
-exit:
-    return err;
-}
-
-OSStatus sensor_trigger_handler_t(void *arg)
-{
-    UNUSED_PARAMETER(arg);
-    uint32_t i;
-    mico_bt_smartbridge_socket_status_t status;
-    OSStatus err = kNoErr;
-
-    mico_bt_smart_attribute_t *characteristic_value = NULL;
-
-    mico_bt_smart_attribute_create(&characteristic_value,
-                                   MICO_ATTRIBUTE_TYPE_CHARACTERISTIC_VALUE,
-                                   LENGTH_HELLO_CHARACTERISTIC_COLOR);
-
-    for (i = 0; i < MAX_CONCURRENT_CONNECTIONS; i++) {
-        mico_bt_smartbridge_get_socket_status(&smartbridge_socket[i], &status);
-
-        if (status == SMARTBRIDGE_SOCKET_CONNECTED && smartbridge_socket[i].att_cache != NULL) {
-            err = mico_bt_smartbridge_get_attribute_cache_by_handle(&smartbridge_socket[i],
-                                                                    hello_color_value_handle[i],
-                                                                    characteristic_value,
-                                                                    ATTR_CHARACTERISTIC_VALUE_SIZE(LENGTH_HELLO_CHARACTERISTIC_COLOR));
-            if (err == kNoErr) {
-                memcpy(characteristic_value->value.value, &color_idx, 1);
-                characteristic_value->value_length = 1;
-                err = mico_bt_smartbridge_write_attribute_cache_characteristic_value(&smartbridge_socket[i],
-                                                                                     characteristic_value);
-                if (err != kNoErr) {
-                    hello_center_log("Write characteristic value failed: %d", err);
-                }
-            } else if (err == MICO_BT_DISCOVER_IN_PROGRESS) {
-                hello_center_log("ATT cache discover is in progress");
-            } else {
-                hello_center_log("Hello color characteristic not found, disconnect");
-                mico_bt_smartbridge_disconnect(&smartbridge_socket[i], FALSE);
-            }
-        }
-    }
-
-    color_idx++;
-
-    if (characteristic_value != NULL) {
-        mico_bt_smart_attribute_delete(characteristic_value);
-    }
-
     return kNoErr;
 }
 
-/* Scan complete handler. Scan complete event reported via this callback.
- * It runs on the MICO_NETWORKING_WORKER_THREAD context.
- */
-OSStatus scan_complete_handler(void *arg)
+static OSStatus hello_center_handle_async_timer_event(void *arg)
 {
-    UNUSED_PARAMETER(arg);
-    /* Scan complete, start a new scan. Donot use a infinit scan, it may store every result in RAM. */
-    mico_bt_smartbridge_start_scan(&scan_settings, scan_complete_handler, scan_result_handler);
-    return kNoErr;
-}
+    static uint8_t color_idx = 0;
 
+    OSStatus err;
 
-OSStatus scan_result_handler(const mico_bt_smart_advertising_report_t *scan_result)
-{
-    /* If connection not initiated yet, and this device has the name we are looking for, then initiate teh connection */
-    if (memcmp(scan_result->remote_device.name, desired_peer_device, strlen(desired_peer_device)) == 0) {
-        connect_list_add(scan_result->remote_device);
-        mico_rtos_send_asynchronous_event(&hello_center_worker_thread, connect_handler, (void *) scan_result);
-    }
-    return kNoErr;
-}
-
-/* Connect handler. Smartbridge connect is executed in this callback.
- * It runs on the connect_worker_thread context
- */
-static OSStatus connect_handler(void *arg)
-{
-    uint32_t i;
-    OSStatus err = kNoErr;
-    mico_bt_smartbridge_socket_status_t status;
-
-    uint8_t attribute_buffer[100];
-    mico_bt_smart_attribute_t *attribute = (mico_bt_smart_attribute_t *) attribute_buffer;
-    char *bt_addr_str = NULL;
-
-    mico_bt_smart_device_t *remote_device;
+    uint8_t                 buffer[50];
+    mico_bt_gatt_value_t    *value = (mico_bt_gatt_value_t *)buffer;
 
     UNUSED_PARAMETER(arg);
 
-    while (connect_list_get(&remote_device) == kNoErr) {
-        bt_addr_str = DataToHexStringWithColons((uint8_t *) remote_device->address, 6);
-        hello_center_log("Opening GATT connection to [%s] (addr type=%s)...",
-                        bt_addr_str,
-                        (remote_device->address_type == BT_SMART_ADDR_TYPE_PUBLIC) ? "Public" : "Random");
-        free(bt_addr_str);
+    mico_rtos_get_semaphore(&hello_center_write_op_sem, 0);
 
-        /* Iterate all sockets and look for the first available socket */
-        for (i = 0; i < MAX_CONCURRENT_CONNECTIONS; i++) {
-            mico_bt_smartbridge_get_socket_status(&smartbridge_socket[i], &status);
+    value->handle   = HANDLE_HSENS_SERVICE_CHAR_COLOR_VAL;
+    value->offset   = 0;
+    value->len      = sizeof(color_idx);
+    value->auth_req = GATT_AUTH_REQ_NONE;
+    memcpy(value->value, &color_idx, value->len);
 
-            /* A free socket is found. Use it to connect */
-            if (status == SMARTBRIDGE_SOCKET_DISCONNECTED) {
-                /* If there is a previously stored device, then connect to it */
-                if (security_settings.authentication_requirements != BT_SMART_AUTH_REQ_NONE) {
-                    if (mico_bt_dev_find_bonded_device((uint8_t *) remote_device->address) == MICO_FALSE) {
-                        hello_center_log("Bond info not found. Initiate pairing request.");
-                        mico_bt_smartbridge_enable_pairing(&smartbridge_socket[i], &security_settings, NULL);
-                    } else {
-                        hello_center_log("Bond info found. Encrypt use bond info.");
-                        mico_bt_smartbridge_set_bond_info(&smartbridge_socket[i], &security_settings, NULL);
-                    }
-                }
-
-                /* Connect */
-                err = mico_bt_smartbridge_connect(&smartbridge_socket[i],
-                                                  remote_device,
-                                                  &connection_settings,
-                                                  disconnection_handler,
-                                                  notification_handler);
-                require_noerr_string(err, exit, "Hello sensor connect failed.");
-                hello_center_log("Smartbridge connection established.");
-
-                /* Find service */
-                err = mico_bt_smartbridge_get_service_from_attribute_cache_by_uuid(&smartbridge_socket[i],
-                                                                                   &hello_service_uuid,
-                                                                                   0x0,
-                                                                                   0xFFFF,
-                                                                                   attribute,
-                                                                                   100);
-                require_noerr_action_string(err, exit, mico_bt_smartbridge_disconnect(&smartbridge_socket[i], FALSE),
-                                            "Hello service not found, disconnect.");
-
-                /* Find characteristic, and save characteristic value handle */
-                err = mico_bt_smartbridge_get_characteritics_from_attribute_cache_by_uuid(&smartbridge_socket[i],
-                                                                                          &hello_color_uuid,
-                                                                                          attribute->value.service.start_handle,
-                                                                                          attribute->value.service.end_handle,
-                                                                                          (mico_bt_smart_attribute_t *) attribute_buffer,
-                                                                                          100);
-                if (err != kNoErr) {
-                    hello_center_log("Hello color characteristic not found, remove att cache and disconnect.");
-                    mico_bt_smartbridge_remove_attribute_cache(&smartbridge_socket[i]);
-                    mico_bt_smartbridge_disconnect(&smartbridge_socket[i], FALSE);
-                }
-
-                hello_color_value_handle[i] = attribute->value.characteristic.value_handle;
-
-                /* Enable Attribute Cache notification */
-                //err = mico_bt_smartbridge_enable_attribute_cache_notification( &smartbridge_socket[i], MICO_TRUE );
-                //require_noerr_string( err, exit, "Attribute cache notification failed." );
-
-                memset(oled_show_line, 0, sizeof(oled_show_line));
-                snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "Devices: %2d", ++hello_sensor_devices);
-                OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_3, oled_show_line);
-
-                goto exit;
-            }
-        }
-exit:
-        connect_list_remove(remote_device);
+    err = mico_bt_gatt_send_write(hello_center_current_device->conn_id, GATT_WRITE, value);
+    if (err != kNoErr) {
+        HELLO_PERIPHERAL_LOG("mico_bt_gatt_send_write failed: %d", err);
+        goto exit;
     }
-    return err;
-}
 
-/* Disconnection handler. Disconnection by remote device is reported via this callback.
- * It runs on the MICO_NETWORKING_WORKER_THREAD context.
- */
-static OSStatus disconnection_handler(mico_bt_smartbridge_socket_t *socket)
-{
-    char *bt_addr_str = DataToHexStringWithColons((uint8_t *) socket->remote_device.address, 6);
-    hello_center_log("Disconnected from [%s]", bt_addr_str);
-    free(bt_addr_str);
+    err = mico_rtos_get_semaphore(&hello_center_write_op_sem, 1000 * 3);
+    if (err != kNoErr) {
+        HELLO_PERIPHERAL_LOG("mico_bt_gatt_send_write tiemout");
+    }
 
     memset(oled_show_line, 0, sizeof(oled_show_line));
-    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "Devices: %2d", --hello_sensor_devices);
+    snprintf(oled_show_line, OLED_DISPLAY_MAX_CHAR_PER_ROW + 1, "Tx Color: 0x%02x", color_idx++);
     OLED_ShowString(OLED_DISPLAY_COLUMN_START, OLED_DISPLAY_ROW_3, oled_show_line);
 
-    return kNoErr;
-}
-
-/* Notification handler. GATT notification by remote device is reported via this callback.
- * It runs on the MICO_NETWORKING_WORKER_THREAD context.
- */
-static OSStatus notification_handler(mico_bt_smartbridge_socket_t *socket, uint16_t attribute_handle)
-{
-    /* GATT value notification event. attribute_handle is the handle
-     * which value of the attribute is updated by the remote device.
-     */
-    OSStatus err = kNoErr;
-    char *bt_addr_str = NULL;
-    char *data_str = NULL;
-    mico_bt_smart_attribute_t *characteristic_value = NULL;
-
-    /* Read sender's address */
-    bt_addr_str = DataToHexStringWithColons((uint8_t *) socket->remote_device.address, 6);
-
-    /* Read cached data */
-    err = mico_bt_smart_attribute_create(&characteristic_value,
-                                         MICO_ATTRIBUTE_TYPE_CHARACTERISTIC_VALUE,
-                                         MAX_CHARACTERISTIC_VALUE_LENGTH);
-    require_noerr(err, exit);
-    err = mico_bt_smartbridge_get_attribute_cache_by_handle(socket,
-                                                            attribute_handle,
-                                                            characteristic_value,
-                                                            ATTR_CHARACTERISTIC_VALUE_SIZE(MAX_CHARACTERISTIC_VALUE_LENGTH));
-    require_noerr_string(err, exit, "This is not a cached value handle, ignore...");
-    data_str = DataToHexStringWithSpaces(characteristic_value->value.value, characteristic_value->value_length);
-
-    hello_center_log("Recv data from [%s], handle 0x%x: %s", bt_addr_str, attribute_handle, data_str);
-
-exit:
-    if (bt_addr_str != NULL) free(bt_addr_str);
-    if (data_str != NULL) free(data_str);
-    if (characteristic_value != NULL) mico_bt_smart_attribute_delete(characteristic_value);
-    return err;
-}
-
-static OSStatus connect_list_init(void)
-{
-    return linked_list_init(&connecting_device_list);
-}
-
-static bool compare_device_by_address(linked_list_node_t *node_to_compare, void *user_data)
-{
-    connecting_device_t *device = (connecting_device_t *) node_to_compare;
-    mico_bt_device_address_t *device_address = (mico_bt_device_address_t *) user_data;
-
-    return memcmp(device->device.address, device_address, BD_ADDR_LEN) == 0;
-}
-
-static OSStatus connect_list_add(mico_bt_smart_device_t remote_device)
-{
-    OSStatus err = kNoErr;
-    connecting_device_t *device_found, *new_device;
-
-    err = linked_list_find_node(&connecting_device_list,
-                                compare_device_by_address,
-                                remote_device.address,
-                                (linked_list_node_t **) &device_found);
-    require_quiet(err == kNotFoundErr, exit);
-
-    new_device = (connecting_device_t *)malloc(sizeof(connecting_device_t));
-    require_action(new_device, exit, err = kNoMemoryErr);
-
-    memcpy(&new_device->device, &remote_device, sizeof(mico_bt_smart_device_t));
-
-    err = linked_list_insert_node_at_rear(&connecting_device_list, &new_device->this_node);
-    require_noerr(err, exit);
-
 exit:
     return err;
 }
-
-static OSStatus connect_list_get(mico_bt_smart_device_t **device)
-{
-    OSStatus err = kNoErr;
-    connecting_device_t *current_device;
-
-    err = linked_list_get_front_node(&connecting_device_list, (linked_list_node_t **) &current_device);
-    require_noerr_quiet(err, exit);
-
-    *device = &current_device->device;
-
-exit:
-    return err;
-}
-
-static OSStatus connect_list_remove(mico_bt_smart_device_t *device)
-{
-    OSStatus err = kNoErr;
-    connecting_device_t *current_device;
-
-    err = linked_list_find_node(&connecting_device_list, compare_device_by_address, device->address,
-                                (linked_list_node_t **) &current_device);
-    require_noerr(err, exit);
-
-    err = linked_list_remove_node(&connecting_device_list, &current_device->this_node);
-    require_noerr(err, exit);
-
-    free(current_device);
-exit:
-    return err;
-}
-
-
-
-
-
-
-
-
-
-

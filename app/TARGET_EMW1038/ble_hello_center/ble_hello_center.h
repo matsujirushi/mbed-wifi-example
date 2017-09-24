@@ -1,10 +1,10 @@
 /**
  ******************************************************************************
- * @file    ble_hello_sensor.h
+ * @file    ble_hello_center.h
  * @author  Jian Zhang
  * @version V1.0.0
  * @date    12-Sep-2017
- * @file    Demonstrate a BLE peripheral device function
+ * @file    Demonstrate a BLE center device function
  * ******************************************************************************
  *
  *  The MIT License
@@ -29,6 +29,7 @@
  *
  ******************************************************************************
  **/
+
 
 #include "mico_bt_dev.h"
 #include "mico_bt_cfg.h"
