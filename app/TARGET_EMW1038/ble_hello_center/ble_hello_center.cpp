@@ -124,8 +124,8 @@ void app_ble_hello_center()
 
     /* Register call back and configuration with stack */
     result = mico_bt_stack_init(hello_center_management_callback,
-                                &mico_bt_cfg_settings_peripheral,
-                                mico_bt_cfg_buf_pools_peripheral);
+                                &mico_bt_cfg_settings,
+                                mico_bt_cfg_buf_pools);
     if (result != MICO_BT_SUCCESS) {
         HELLO_PERIPHERAL_LOG("Bluetooth Stack initialised failed");
         goto exit1;
@@ -244,7 +244,9 @@ hello_center_management_callback(mico_bt_management_evt_t event,
     switch (event) {
         /* Bluetooth  stack enabled */
         case BTM_ENABLED_EVT:
-            hello_center_application_init();
+            if (p_event_data->enabled.status == MICO_BT_SUCCESS) {
+                hello_center_application_init();
+            }
             break;
 
         case BTM_DISABLED_EVT:

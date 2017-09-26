@@ -290,8 +290,8 @@ void app_ble_hello_sensor()
 
     /* Register call back and configuration with stack */
     mico_bt_stack_init(hello_sensor_management_callback,
-                       &mico_bt_cfg_settings_peripheral,
-                       mico_bt_cfg_buf_pools_peripheral);
+                       &mico_bt_cfg_settings,
+                       mico_bt_cfg_buf_pools);
 }
 
 /*

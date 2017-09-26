@@ -111,8 +111,8 @@ typedef enum {
     HDLD_CURRENT_TIME_SERVICE_CURRENT_TIME_CLIENT_CONFIGURATION,
 } hello_sensor_db_tags;
 
-extern const mico_bt_cfg_settings_t mico_bt_cfg_settings_peripheral;
-extern const mico_bt_cfg_buf_pool_t mico_bt_cfg_buf_pools_peripheral[];
+extern const mico_bt_cfg_settings_t mico_bt_cfg_settings;
+extern const mico_bt_cfg_buf_pool_t mico_bt_cfg_buf_pools[];
 
 #ifdef __cplusplus
 }

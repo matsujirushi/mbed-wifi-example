@@ -35,7 +35,7 @@
 /*****************************************************************************
 * mico_bt core stack configuration
 ****************************************************************************/
-mico_bt_cfg_settings_t mico_bt_cfg_settings_peripheral = {
+mico_bt_cfg_settings_t mico_bt_cfg_settings = {
     .device_name               = (uint8_t*)DEFAULT_NAME, /**< Local device name (NULL terminated) */
     .device_class              = { 0x00, 0x00, 0x00 },        /**< Local device class */
     .security_requirement_mask = BTM_SEC_NONE,                /**< Security requirements mask (BTM_SEC_NONE, or combination of BTM_SEC_IN_AUTHENTICATE, BTM_SEC_OUT_AUTHENTICATE, BTM_SEC_ENCRYPT (see #mico_bt_sec_level_e)) */
@@ -142,7 +142,7 @@ mico_bt_cfg_settings_t mico_bt_cfg_settings_peripheral = {
 * Pools must be ordered in increasing buf_size.
 * If a pool runs out of buffers, the next  pool will be used
 *****************************************************************************/
-const mico_bt_cfg_buf_pool_t mico_bt_cfg_buf_pools_peripheral[MICO_BT_CFG_NUM_BUF_POOLS] =
+const mico_bt_cfg_buf_pool_t mico_bt_cfg_buf_pools[MICO_BT_CFG_NUM_BUF_POOLS] =
 {
     /*  { buf_size, buf_count } */
     { 64,       4   },      /* Small Buffer Pool */
