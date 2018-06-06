@@ -125,7 +125,7 @@ uint32_t nau88c10_Init(uint16_t DeviceAddr, uint16_t OutputInputDevice, uint32_t
   CODEC_IO_Write(DeviceAddr,0x8,0x0000);
   CODEC_IO_Write(DeviceAddr,0x9,0x0000);
   CODEC_IO_Write(DeviceAddr,0xa,0x0008);
-  CODEC_IO_Write(DeviceAddr,0xb,0x01ff);
+  CODEC_IO_Write(DeviceAddr,0xb,0x01FF);
   CODEC_IO_Write(DeviceAddr,0xc,0x0000);
   CODEC_IO_Write(DeviceAddr,0xd,0x0000);
   CODEC_IO_Write(DeviceAddr,0xe,0x0108);
@@ -167,7 +167,7 @@ uint32_t nau88c10_Init(uint16_t DeviceAddr, uint16_t OutputInputDevice, uint32_t
   CODEC_IO_Write(DeviceAddr,0x33,0x0000);
   CODEC_IO_Write(DeviceAddr,0x34,0x0040);
   CODEC_IO_Write(DeviceAddr,0x35,0x0040);
-  CODEC_IO_Write(DeviceAddr,0x36,0x00b9);
+  CODEC_IO_Write(DeviceAddr,0x36,0x00bF);
   CODEC_IO_Write(DeviceAddr,0x37,0x0040);
   /*output in HeadPhone*/
   CODEC_IO_Write(DeviceAddr,0x38,0x0001);
@@ -289,8 +289,8 @@ uint32_t nau88c10_Stop(uint16_t DeviceAddr, uint32_t CodecPdwnMode)
 {
   uint32_t counter = 0;
 
-  if (outputEnabled != 0)
-  {
+  // if (outputEnabled != 0)
+  // {
     /* Mute the output first */
     counter += nau88c10_SetMute(DeviceAddr, AUDIO_MUTE_ON);
 
@@ -320,7 +320,7 @@ uint32_t nau88c10_Stop(uint16_t DeviceAddr, uint32_t CodecPdwnMode)
 
       outputEnabled = 0;
     }
-  }
+// }
   return counter;
 }
 
@@ -337,66 +337,15 @@ uint32_t nau88c10_SetVolume(uint16_t DeviceAddr, uint8_t Volume)
   uint8_t convertedvol = VOLUME_CONVERT(Volume);
 
   /* Output volume */
-  if (outputEnabled != 0)
-  {
-    if(convertedvol > 0x3E)
-    {
-      /* Unmute audio codec */
-      counter += nau88c10_SetMute(DeviceAddr, AUDIO_MUTE_OFF);
+  // if ( 1==mode )
+  // {
+    counter = CODEC_IO_Write(DeviceAddr,0xb,convertedvol);
+  // }
+  // else  /* Input volume */
+  // {
+  //   CODEC_IO_Write(DeviceAddr,0xf,Volume);
+  // }
 
-      /* Left Headphone Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x1C, 0x3F | 0x140);
-
-      /* Right Headphone Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x1D, 0x3F | 0x140);
-
-      /* Left Speaker Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x26, 0x3F | 0x140);
-
-      /* Right Speaker Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x27, 0x3F | 0x140);
-    }
-    else if (Volume == 0)
-    {
-      /* Mute audio codec */
-      counter += nau88c10_SetMute(DeviceAddr, AUDIO_MUTE_ON);
-    }
-    else
-    {
-      /* Unmute audio codec */
-      counter += nau88c10_SetMute(DeviceAddr, AUDIO_MUTE_OFF);
-
-      /* Left Headphone Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x1C, convertedvol | 0x140);
-
-      /* Right Headphone Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x1D, convertedvol | 0x140);
-
-      /* Left Speaker Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x26, convertedvol | 0x140);
-
-      /* Right Speaker Volume */
-      counter += CODEC_IO_Write(DeviceAddr, 0x27, convertedvol | 0x140);
-    }
-  }
-
-  /* Input volume */
-  if (inputEnabled != 0)
-  {
-    convertedvol = VOLUME_IN_CONVERT(Volume);
-
-    /* Left AIF1 ADC1 volume */
-    counter += CODEC_IO_Write(DeviceAddr, 0x400, convertedvol | 0x100);
-
-    /* Right AIF1 ADC1 volume */
-    counter += CODEC_IO_Write(DeviceAddr, 0x401, convertedvol | 0x100);
-
-    /* Left AIF1 ADC2 volume */
-    counter += CODEC_IO_Write(DeviceAddr, 0x404, convertedvol | 0x100);
-
-    /* Right AIF1 ADC2 volume */
-    counter += CODEC_IO_Write(DeviceAddr, 0x405, convertedvol | 0x100);
-  }
   return counter;
 }
 
@@ -410,27 +359,19 @@ uint32_t nau88c10_SetVolume(uint16_t DeviceAddr, uint8_t Volume)
 uint32_t nau88c10_SetMute(uint16_t DeviceAddr, uint32_t Cmd)
 {
   uint32_t counter = 0;
-  
-  if (outputEnabled != 0)
+
+  /* Set the Mute mode */
+  if(Cmd == AUDIO_MUTE_ON)
   {
-    /* Set the Mute mode */
-    if(Cmd == AUDIO_MUTE_ON)
-    {
-      /* Soft Mute the AIF1 Timeslot 0 DAC1 path L&R */
-      counter += CODEC_IO_Write(DeviceAddr, 0x420, 0x0200);
-
-      /* Soft Mute the AIF1 Timeslot 1 DAC2 path L&R */
-      counter += CODEC_IO_Write(DeviceAddr, 0x422, 0x0200);
-    }
-    else /* AUDIO_MUTE_OFF Disable the Mute */
-    {
-      /* Unmute the AIF1 Timeslot 0 DAC1 path L&R */
-      counter += CODEC_IO_Write(DeviceAddr, 0x420, 0x0000);
-
-      /* Unmute the AIF1 Timeslot 1 DAC2 path L&R */
-      counter += CODEC_IO_Write(DeviceAddr, 0x422, 0x0000);
-    }
+    /* Soft Mute the AIF1 Timeslot 0 DAC1 path L&R */
+    counter += CODEC_IO_Write(DeviceAddr, 0x36, 0x60);
   }
+  else /* AUDIO_MUTE_OFF Disable the Mute */
+  {
+    /* Unmute the AIF1 Timeslot 0 DAC1 path L&R */
+    counter += CODEC_IO_Write(DeviceAddr, 0x36, 0x5F);
+  }
+
   return counter;
 }
 

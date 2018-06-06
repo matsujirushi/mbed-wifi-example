@@ -58,7 +58,7 @@ uint8_t BSP_AUDIO_IN_OUT_Init( uint16_t OutputDevice, uint32_t AudioDataFormat, 
     /* Configure the I2S peripheral */
     haudio_i2s.Instance = AUDIO_OUT_I2Sx;
     if ( HAL_I2S_GetState( &haudio_i2s ) == HAL_I2S_STATE_RESET )
-         {
+    {
         /* Initialize the I2S Msp: this __weak function can be rewritten by the application */
         BSP_AUDIO_OUT_MspInit( &haudio_i2s, NULL );
         BSP_AUDIO_IN_MspInit( NULL );
@@ -75,6 +75,7 @@ uint8_t BSP_AUDIO_IN_OUT_Init( uint16_t OutputDevice, uint32_t AudioDataFormat, 
 
     if ( deviceid == NAU88C10_ID )
     {
+
         /* Reset the Codec Registers */
         nau88c10_drv.Reset( AUDIO_I2C_WRITE_ADDRESS );
         /* Initialize the audio driver structure */
@@ -220,11 +221,11 @@ uint8_t BSP_AUDIO_OUT_Stop( uint32_t Option )
  *         Mute and 100 for Max volume level).
  * @retval AUDIO_OK if correct communication, else wrong communication
  */
-uint8_t BSP_AUDIO_OUT_SetVolume( uint8_t Volume )
+uint8_t BSP_AUDIO_OUT_SetVolume( uint8_t Volume)
 {
     /* Call the codec volume control function with converted volume value */
-    if ( audio_drv->SetVolume( AUDIO_I2C_ADDRESS, Volume ) != 0 )
-         {
+    if ( audio_drv->SetVolume( AUDIO_I2C_WRITE_ADDRESS, Volume ) != 0 )
+    {
         return AUDIO_ERROR;
     }
     else
