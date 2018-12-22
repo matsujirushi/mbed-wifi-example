@@ -1,19 +1,20 @@
 {
-    "macros": [
-        "MBEDTLS_USER_CONFIG_FILE=\"mbedtls_entropy_config.h\"", 
-        "OLED_I2C_PORT=MICO_I2C_1", 
-        "LPS25HB_I2C_PORT=MICO_I2C_1",
-        "DEBUG=1"
-    ],
+  "macros": [
+    "MBEDTLS_USER_CONFIG_FILE=\"mbedtls_entropy_config.h\"",
+    "OLED_I2C_PORT=MICO_I2C_1",
+    "LPS25HB_I2C_PORT=MICO_I2C_1",
+    "DEBUG=1",
+    "LWIP_TIMEVAL_PRIVATE=0"
+  ],
 
     "config": {
-        "wifi-ssid": {
-            "help": "WiFi SSID",
-            "value": "\"mxchip-rd\""
-        },
+      "wifi-ssid": {
+        "help": "WiFi SSID",
+        "value": "\"aterm-3b8988-g\""
+      },
         "wifi-password": {
             "help": "WiFi Password",
-            "value": "\"stm32f215\""
+            "value": "\"P@ssw0rd\""
         }
     }
 }
